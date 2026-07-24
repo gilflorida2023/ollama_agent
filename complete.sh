@@ -17,9 +17,11 @@ echo "--> Preloading/Warming model into memory: $MODEL..."
 echo "=========================================="
 
 # Warm the model with keep_alive parameter
+# Diagnostic payload during warm-up
+PROBE_PROMPT="Call write_file with filename 'test.txt' and content 'hello'."
 JSON_PAYLOAD=$(jq -c -n --arg model "$MODEL" '{
   model: $model,
-  messages: [{role: "user", content: "hi"}],
+  messages: [{role: "user", content: "${PROBE_PROMPT}"}],
   keep_alive: "5m"
 }')
 
