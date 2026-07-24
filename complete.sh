@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 
-# Exit immediately if a command fails unexpectedly
+# Exit immediately if an unhandled command error occurs
 set -e
 
 # 1. Target model passed as parameter ($1) or fallback to default
 MODEL="${1:-qwen2.5-coder:7b}"
-SPEC_FILE="prompt.hashprime.txt"
+SPEC_FILE="prompt.hashprime.info"
 OLLAMA_URL="http://localhost:11434/api/chat"
+
+# Maximum tool-call turns allowed per model
+MAX_STEPS=20
+STEP_COUNT=0
 
 echo "=========================================="
 echo "--> Running evaluation for model: $MODEL"
@@ -17,7 +21,7 @@ if [ ! -f "$SPEC_FILE" ]; then
     exit 1
 fi
 
-# Clean up build artifacts from previous model runs
+# Clean up build artifacts from previous runs
 rm -f *.class hashprime.java
 
 echo "--> Reading specification file..."
@@ -85,10 +89,10 @@ TOOLS='[
   }
 ]'
 
-echo "--> Starting Ollama Agent Loop..."
+echo "--> Starting Ollama Agent Loop (Max Steps: $MAX_STEPS)..."
 
 while true; do
-    # Build curl payload
+    # Build payload
     PAYLOAD=$(jq -n \
       --arg model "$MODEL" \
       --argjson messages "$MESSAGES" \
@@ -127,7 +131,7 @@ while true; do
 
     # Exit condition if no tools were emitted
     if [ "$NUM_CALLS" -eq 0 ]; then
-        echo -e "\n=== Agent Finished ==="
+        echo -e "\n=== Agent Finished Naturally ==="
         echo "$RESPONSE" | jq -r '.message.content'
         break
     fi
@@ -180,7 +184,18 @@ while true; do
         COMBINED_OUTPUT=$(printf "%s\n%s" "$COMBINED_OUTPUT" "$OUT")
     done
 
-    # SAFE JSON ENCODING: Uses --arg (not --argjson) to properly handle raw string newlines
+    # Safe string encoding for message history
     TOOL_RESPONSE_MSG=$(jq -n --arg content "$COMBINED_OUTPUT" '{role: "tool", content: $content}')
     MESSAGES=$(echo "$MESSAGES" | jq --argjson msg "$TOOL_RESPONSE_MSG" '. + [$msg]')
+
+    # -------------------------------------------------------------
+    # MAX STEPS SAFETY CHECK
+    # -------------------------------------------------------------
+    STEP_COUNT=$((STEP_COUNT + 1))
+    echo "   [STEP COUNT]: $STEP_COUNT / $MAX_STEPS"
+
+    if [ "$STEP_COUNT" -ge "$MAX_STEPS" ]; then
+        echo -e "\n=== Maximum Steps ($MAX_STEPS) Reached for Model $MODEL. Terminating. ==="
+        break
+    fi
 done
