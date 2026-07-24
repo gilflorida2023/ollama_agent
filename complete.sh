@@ -3,13 +3,43 @@
 # Exit immediately if an unhandled command error occurs
 set -e
 
+
+seconds_to_human() {
+    local total=$1
+    local -i d h m s
+    local out=""
+
+    # Debug: show raw value when it's ridiculous
+    if (( total > 100000000 || total < 0 )); then
+        echo "WARNING: seconds_to_human got strange value: $total" >&2
+    fi
+
+    # Safety check
+    if ! [[ "$total" =~ ^[0-9]+$ ]] || (( total < 0 )); then
+        echo "0s"
+        return 1
+    fi
+
+    d=$((total / 86400))
+    h=$((total % 86400 / 3600))
+    m=$((total % 3600 / 60))
+    s=$((total % 60))
+
+    (( d > 0 )) && out="${out}${d}d "
+    (( h > 0 )) && out="${out}${h}h "
+    (( m > 0 )) && out="${out}${m}m "
+    (( s >= 0 )) && out="${out}${s}s"
+
+    echo -n "${out%" "}"
+}
+
 # 1. Target model passed as parameter ($1) or fallback to default
 MODEL="${1:-qwen2.5-coder:7b}"
 SPEC_FILE="prompt.hashprime.info"
 OLLAMA_URL="http://localhost:11434/api/chat"
 
 # Maximum tool-call turns allowed per model
-MAX_STEPS=r0
+MAX_STEPS=10
 STEP_COUNT=0
 
 echo "=========================================="
@@ -29,7 +59,7 @@ curl -s "$OLLAMA_URL" \
      > /dev/null
 
 echo "✅ Model preloaded successfully."
-
+START_TIME=$(date +%s)
 echo "=========================================="
 echo "--> Running evaluation for model: $MODEL"
 echo "=========================================="
@@ -40,7 +70,7 @@ if [ ! -f "$SPEC_FILE" ]; then
 fi
 
 # Clean up build artifacts from previous runs
-rm -f *.class hashprime.java hashprime_large.java
+rm -f *.class *.java
 
 echo "--> Reading specification file..."
 SPEC_TEXT=$(cat "$SPEC_FILE")
@@ -256,3 +286,9 @@ print(json.dumps(tool_calls))
         break
     fi
 done
+
+END_TIME=$(date +%s)
+elapsed=$(( END_TIME - START_TIME ))
+echo "=========================================="
+echo  "--> Done in $(seconds_to_human ${elapsed}) ---"
+echo "=========================================="
