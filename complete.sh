@@ -1,5 +1,44 @@
 #!/usr/bin/env bash
 
+# Paste this in your ~/.bashrc or ~/.bash_aliases, or in your script
+kill_ollama_models() {
+    echo "🛑 Stopping all running Ollama models..."
+
+    local max_attempts=30
+    local attempt=0
+
+    while true; do
+        # Get running models (skip header line)
+        local running
+        running=$(ollama ps 2>/dev/null | tail -n +2 | awk '{print $1}')
+
+        if [ -z "$running" ]; then
+            echo "✅ All Ollama models are stopped."
+            return 0
+        fi
+
+        echo "Found running model(s):"
+        echo "$running"
+
+        # Stop each model
+        while IFS= read -r model; do
+            if [ -n "$model" ]; then
+                echo "Stopping: $model"
+                ollama stop "$model" 2>/dev/null || true
+            fi
+        done <<< "$running"
+
+        sleep 2
+
+        ((attempt++))
+        if [ $attempt -ge $max_attempts ]; then
+            echo "⚠️  Reached maximum attempts. Some models may still be running."
+            return 1
+        fi
+    done
+}
+
+
 # Exit immediately if an unhandled command error occurs
 set -e
 
@@ -11,6 +50,17 @@ OLLAMA_URL="http://localhost:11434/api/chat"
 # Maximum tool-call turns allowed per model
 MAX_STEPS=20
 STEP_COUNT=0
+
+
+kill_ollama_models
+
+echo "--> Preloading/Warming model into memory: $MODEL..."
+curl -s "$OLLAMA_URL" -H "Content-Type: application/json" -d $(jq -n --arg model "$MODEL" '{
+  model: $model,
+  messages: [{role: "user", content: "hi"}],
+  keep_alive: "5m"
+}') > /dev/null
+
 
 echo "=========================================="
 echo "--> Running evaluation for model: $MODEL"
