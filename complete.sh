@@ -9,19 +9,17 @@ SPEC_FILE="prompt.hashprime.info"
 OLLAMA_URL="http://localhost:11434/api/chat"
 
 # Maximum tool-call turns allowed per model
-MAX_STEPS=20
+MAX_STEPS=r0
 STEP_COUNT=0
 
 echo "=========================================="
 echo "--> Preloading/Warming model into memory: $MODEL..."
 echo "=========================================="
 
-# Warm the model with keep_alive parameter
-# Diagnostic payload during warm-up
-PROBE_PROMPT="Call write_file with filename 'test.txt' and content 'hello'."
+# Pre-warm model weights into VRAM
 JSON_PAYLOAD=$(jq -c -n --arg model "$MODEL" '{
   model: $model,
-  messages: [{role: "user", content: "${PROBE_PROMPT}"}],
+  messages: [{role: "user", content: "hi"}],
   keep_alive: "5m"
 }')
 
@@ -30,7 +28,7 @@ curl -s "$OLLAMA_URL" \
      -d "$JSON_PAYLOAD" \
      > /dev/null
 
-echo "✅ Model preload request sent."
+echo "✅ Model preloaded successfully."
 
 echo "=========================================="
 echo "--> Running evaluation for model: $MODEL"
@@ -42,7 +40,7 @@ if [ ! -f "$SPEC_FILE" ]; then
 fi
 
 # Clean up build artifacts from previous runs
-rm -f *.class hashprime.java
+rm -f *.class hashprime.java hashprime_large.java
 
 echo "--> Reading specification file..."
 SPEC_TEXT=$(cat "$SPEC_FILE")
@@ -122,68 +120,75 @@ while true; do
     # Send request to Ollama
     RESPONSE=$(curl -s "$OLLAMA_URL" -H "Content-Type: application/json" -d "$PAYLOAD")
 
-    # Record assistant message into history
+    # Record assistant response in conversation history
     ASSISTANT_MSG=$(echo "$RESPONSE" | jq '.message')
     MESSAGES=$(echo "$MESSAGES" | jq --argjson msg "$ASSISTANT_MSG" '. + [$msg]')
 
-    TOOL_CALLS_ARRAY="[]"
+    # -------------------------------------------------------------
+    # UNIFIED MULTI-FORMAT TOOL EXTRACTOR (Python Stream Parser)
+    # -------------------------------------------------------------
+    TOOL_CALLS_ARRAY=$(python3 -c '
+import sys, json, re
 
-    # 1. First check native tool calls
-    NATIVE_CALLS=$(echo "$RESPONSE" | jq -c '.message.tool_calls // []')
-    if [ "$NATIVE_CALLS" != "[]" ]; then
-        TOOL_CALLS_ARRAY=$(echo "$NATIVE_CALLS" | jq '[.[] | {name: .function.name, arguments: .function.arguments}]')
-    else
-        RAW_CONTENT=$(echo "$RESPONSE" | jq -r '.message.content // empty')
-        
-        # 2. Fallback: Parse raw JSON objects out of text content
-        CLEAN_TEXT=$(echo "$RAW_CONTENT" | sed 's/```json//g; s/```//g')
-        PARSED_JSON=$(echo "$CLEAN_TEXT" | jq -s '.' 2>/dev/null || echo "[]")
-        
-        if [ "$PARSED_JSON" != "[]" ] && echo "$PARSED_JSON" | jq -e '.[0].name' >/dev/null 2>&1; then
-            TOOL_CALLS_ARRAY="$PARSED_JSON"
-        else
-            # 3. Fallback: Parse XML tags (for Heretic / Claude / Agent-style models)
-            XML_JSON_ARRAY="[]"
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    print("[]")
+    sys.exit(0)
 
-            if echo "$RAW_CONTENT" | grep -q "<write_file"; then
-                FILENAME=$(echo "$RAW_CONTENT" | sed -n 's/.*<write_file[^>]*filename="\([^"]*\)".*/\1/p')
-                CONTENT=$(echo "$RAW_CONTENT" | sed -n 's/.*content="\([^"]*\)".*/\1/p')
-                if [ -n "$FILENAME" ]; then
-                    XML_JSON_ARRAY=$(echo "$XML_JSON_ARRAY" | jq --arg fn "$FILENAME" --arg cnt "$CONTENT" \
-                      '. + [{name: "write_file", arguments: {filename: $fn, content: $cnt}}]')
-                fi
-            fi
+tool_calls = []
 
-            if echo "$RAW_CONTENT" | grep -q "<javac"; then
-                FILENAME=$(echo "$RAW_CONTENT" | sed -n 's/.*<javac[^>]*filename="\([^"]*\)".*/\1/p')
-                if [ -n "$FILENAME" ]; then
-                    XML_JSON_ARRAY=$(echo "$XML_JSON_ARRAY" | jq --arg fn "$FILENAME" \
-                      '. + [{name: "javac", arguments: {filename: $fn}}]')
-                fi
-            fi
+# 1. Check Native Tool Calls
+native = data.get("message", {}).get("tool_calls", [])
+if native:
+    for tc in native:
+        func = tc.get("function", {})
+        tool_calls.append({"name": func.get("name"), "arguments": func.get("arguments")})
 
-            if echo "$RAW_CONTENT" | grep -q "<java"; then
-                echo "$RAW_CONTENT" | grep -o '<java[^>]*/>' | while read -r line; do
-                    CNAME=$(echo "$line" | sed -n 's/.*class_name="\([^"]*\)".*/\1/p')
-                    RAW_A=$(echo "$line" | sed -n 's/.*args="\([^"]*\)".*/\1/p')
-                    CLEAN_A=$(echo "$RAW_A" | sed 's/\\"/\"/g')
-                    
-                    if [ -n "$CNAME" ]; then
-                        XML_JSON_ARRAY=$(echo "$XML_JSON_ARRAY" | jq --arg cn "$CNAME" --argjson args "$CLEAN_A" \
-                          '. + [{name: "java", arguments: {class_name: $cn, args: $args}}]' 2>/dev/null || \
-                        echo "$XML_JSON_ARRAY" | jq --arg cn "$CNAME" \
-                          '. + [{name: "java", arguments: {class_name: $cn, args: []}}]')
-                    fi
-                done
-            fi
+# 2. Check Embedded Multi-Line JSON Objects
+if not tool_calls:
+    content = data.get("message", {}).get("content", "") or ""
+    decoder = json.JSONDecoder()
+    pos = 0
+    while pos < len(content):
+        match = content.find("{", pos)
+        if match == -1:
+            break
+        try:
+            obj, end = decoder.raw_decode(content[match:])
+            if isinstance(obj, dict) and "name" in obj:
+                args = obj.get("arguments", {})
+                tool_calls.append({"name": obj["name"], "arguments": args})
+            pos = match + end
+        except Exception:
+            pos = match + 1
 
-            TOOL_CALLS_ARRAY="$XML_JSON_ARRAY"
-        fi
-    fi
+# 3. Check XML Tags (Fallback for Heretic / Claude-style models)
+if not tool_calls:
+    content = data.get("message", {}).get("content", "") or ""
+    
+    # <write_file filename="..." content="...">
+    for fn, cnt in re.findall(r"<write_file\s+filename=\"([^\"]+)\"\s+content=\"([^\"]+)\"", content, re.DOTALL):
+        tool_calls.append({"name": "write_file", "arguments": {"filename": fn, "content": cnt}})
+    
+    # <javac filename="...">
+    for fn in re.findall(r"<javac\s+filename=\"([^\"]+)\"", content):
+        tool_calls.append({"name": "javac", "arguments": {"filename": fn}})
+    
+    # <java class_name="..." args="...">
+    for cn, args_str in re.findall(r"<java\s+class_name=\"([^\"]+)\"(?:\s+args=\"([^\"]+)\")?", content):
+        try:
+            args = json.loads(args_str.replace("\\\"", "\"")) if args_str else []
+        except Exception:
+            args = [args_str] if args_str else []
+        tool_calls.append({"name": "java", "arguments": {"class_name": cn, "args": args}})
+
+print(json.dumps(tool_calls))
+' <<< "$RESPONSE")
 
     NUM_CALLS=$(echo "$TOOL_CALLS_ARRAY" | jq 'length')
 
-    # Exit condition if no tools were emitted
+    # Exit condition if no actions were detected
     if [ "$NUM_CALLS" -eq 0 ]; then
         echo -e "\n=== Agent Finished Naturally ==="
         echo "$RESPONSE" | jq -r '.message.content'
@@ -192,7 +197,7 @@ while true; do
 
     COMBINED_OUTPUT=""
 
-    # Process all detected actions sequentially
+    # Process extracted tool actions sequentially
     for (( i=0; i<$NUM_CALLS; i++ )); do
         CALL=$(echo "$TOOL_CALLS_ARRAY" | jq ".[$i]")
         TOOL_NAME=$(echo "$CALL" | jq -r '.name')
@@ -242,9 +247,7 @@ while true; do
     TOOL_RESPONSE_MSG=$(jq -n --arg content "$COMBINED_OUTPUT" '{role: "tool", content: $content}')
     MESSAGES=$(echo "$MESSAGES" | jq --argjson msg "$TOOL_RESPONSE_MSG" '. + [$msg]')
 
-    # -------------------------------------------------------------
-    # MAX STEPS SAFETY CHECK
-    # -------------------------------------------------------------
+    # Step limit guard
     STEP_COUNT=$((STEP_COUNT + 1))
     echo "   [STEP COUNT]: $STEP_COUNT / $MAX_STEPS"
 
