@@ -3,36 +3,6 @@
 # Exit immediately if an unhandled command error occurs
 set -e
 
-
-seconds_to_human() {
-    local total=$1
-    local -i d h m s
-    local out=""
-
-    # Debug: show raw value when it's ridiculous
-    if (( total > 100000000 || total < 0 )); then
-        echo "WARNING: seconds_to_human got strange value: $total" >&2
-    fi
-
-    # Safety check
-    if ! [[ "$total" =~ ^[0-9]+$ ]] || (( total < 0 )); then
-        echo "0s"
-        return 1
-    fi
-
-    d=$((total / 86400))
-    h=$((total % 86400 / 3600))
-    m=$((total % 3600 / 60))
-    s=$((total % 60))
-
-    (( d > 0 )) && out="${out}${d}d "
-    (( h > 0 )) && out="${out}${h}h "
-    (( m > 0 )) && out="${out}${m}m "
-    (( s >= 0 )) && out="${out}${s}s"
-
-    echo -n "${out%" "}"
-}
-
 # 1. Target model passed as parameter ($1) or fallback to default
 MODEL="${1:-qwen2.5-coder:7b}"
 SPEC_FILE="prompt.hashprime.info"
@@ -41,6 +11,11 @@ OLLAMA_URL="http://localhost:11434/api/chat"
 # Maximum tool-call turns allowed per model
 MAX_STEPS=10
 STEP_COUNT=0
+
+# Metrics Tracking Counters
+TOTAL_PROMPT_TOKENS=0
+TOTAL_EVAL_TOKENS=0
+TOTAL_DURATION_NS=0
 
 echo "=========================================="
 echo "--> Preloading/Warming model into memory: $MODEL..."
@@ -59,7 +34,7 @@ curl -s "$OLLAMA_URL" \
      > /dev/null
 
 echo "✅ Model preloaded successfully."
-START_TIME=$(date +%s)
+
 echo "=========================================="
 echo "--> Running evaluation for model: $MODEL"
 echo "=========================================="
@@ -70,7 +45,7 @@ if [ ! -f "$SPEC_FILE" ]; then
 fi
 
 # Clean up build artifacts from previous runs
-rm -f *.class *.java
+rm -f *.class hashprime.java hashprime_large.java
 
 echo "--> Reading specification file..."
 SPEC_TEXT=$(cat "$SPEC_FILE")
@@ -149,6 +124,15 @@ while true; do
 
     # Send request to Ollama
     RESPONSE=$(curl -s "$OLLAMA_URL" -H "Content-Type: application/json" -d "$PAYLOAD")
+
+    # Accumulate Performance & Token Metrics
+    P_TOKENS=$(echo "$RESPONSE" | jq -r '.prompt_eval_count // 0')
+    E_TOKENS=$(echo "$RESPONSE" | jq -r '.eval_count // 0')
+    DUR_NS=$(echo "$RESPONSE" | jq -r '.total_duration // 0')
+
+    TOTAL_PROMPT_TOKENS=$((TOTAL_PROMPT_TOKENS + P_TOKENS))
+    TOTAL_EVAL_TOKENS=$((TOTAL_EVAL_TOKENS + E_TOKENS))
+    TOTAL_DURATION_NS=$((TOTAL_DURATION_NS + DUR_NS))
 
     # Record assistant response in conversation history
     ASSISTANT_MSG=$(echo "$RESPONSE" | jq '.message')
@@ -287,8 +271,28 @@ print(json.dumps(tool_calls))
     fi
 done
 
-END_TIME=$(date +%s)
-elapsed=$(( END_TIME - START_TIME ))
+# ==============================================================================
+# FINAL EVALUATION SUMMARY REPORT
+# ==============================================================================
+
+# Calculate elapsed time in seconds with decimal precision
+TOTAL_SECS=$(awk -v ns="$TOTAL_DURATION_NS" 'BEGIN { printf "%.2f", ns / 1000000000 }')
+TOTAL_TOKENS=$((TOTAL_PROMPT_TOKENS + TOTAL_EVAL_TOKENS))
+
+# Calculate Tokens Per Second (TPS)
+if [ "$(echo "$TOTAL_SECS > 0" | awk '{print ($1 > 0)}')" -eq 1 ]; then
+    TPS=$(awk -v tok="$TOTAL_EVAL_TOKENS" -v sec="$TOTAL_SECS" 'BEGIN { printf "%.2f", tok / sec }')
+else
+    TPS="0.00"
+fi
+
+echo -e "\n=========================================="
+echo "📊 PERFORMANCE REPORT: $MODEL"
 echo "=========================================="
-echo  "--> Done in $(seconds_to_human ${elapsed}) ---"
+echo " Total Steps Taken:    $STEP_COUNT / $MAX_STEPS"
+echo " Total Elapsed Time:   ${TOTAL_SECS}s"
+echo " Prompt Tokens:        $TOTAL_PROMPT_TOKENS"
+echo " Generated Tokens:     $TOTAL_EVAL_TOKENS"
+echo " Total Tokens:         $TOTAL_TOKENS"
+echo " Generation Speed:     ${TPS} tokens/sec"
 echo "=========================================="
