@@ -1,22 +1,16 @@
 #!/usr/bin/env bash
 
-# Disable history expansion so '!' in Java code preview logs won't break Bash
 set +H
-
-# Exit immediately if an unhandled command error occurs
 set -e
 
-# Target model passed as parameter ($1) or fallback to default
 MODEL="${1:-qwen2.5-coder:7b}"
 SPEC_FILE="prompt.hashprime.info"
 OLLAMA_URL="http://localhost:11434/api/chat"
 
-# Directories and paths
 CONFIG_DIR=".configs"
 SANITIZED_MODEL=$(echo "$MODEL" | sed 's/[/:]/_/g')
 PARSER_FILE="$CONFIG_DIR/${SANITIZED_MODEL}.sh"
 
-# Maximum tool-call turns allowed per model
 MAX_STEPS=10
 STEP_COUNT=0
 START_TIME=$(date +%s)
@@ -25,7 +19,6 @@ echo "=========================================="
 echo "--> Preloading/Warming model into memory: $MODEL..."
 echo "=========================================="
 
-# Pre-warm model weights into VRAM
 JSON_PAYLOAD=$(jq -c -n --arg model "$MODEL" '{
   model: $model,
   messages: [{role: "user", content: "hi"}],
@@ -39,7 +32,6 @@ curl -s "$OLLAMA_URL" \
 
 echo "✅ Model preloaded successfully."
 
-# Ensure a dedicated parser exists; auto-profile if missing
 if [ ! -f "$PARSER_FILE" ]; then
     echo "⚠️  No parser profile found for $MODEL. Running profile_model.sh..."
     bash ./profile_model.sh "$MODEL"
@@ -55,18 +47,13 @@ if [ ! -f "$SPEC_FILE" ]; then
     exit 1
 fi
 
-# ======================================================
-# Clean up build artifacts from previous runs
-# User made this change to eliminate contamination before the run.
-# Please DO NOT MODIFY unless error exists.
-rm -f *.class *.java 2>&1 2>/dev/null
+rm -f *.class *.java 2>&1 >/dev/null || true
 
 echo "--> Reading specification file..."
 SPEC_TEXT=$(cat "$SPEC_FILE")
 
 SYSTEM_PROMPT="You are an automated software engineer. ALWAYS follow this strict action sequence: 1) write_file, 2) javac, 3) java. Never attempt to run 'java' before 'javac' succeeds. Test N=11 and N=1000, then stop."
 
-# Initialize conversation history safely using stdin
 MESSAGES=$(jq -n \
   --arg sys "$SYSTEM_PROMPT" \
   --arg spec "$SPEC_TEXT" \
@@ -75,7 +62,6 @@ MESSAGES=$(jq -n \
     {role: "user", content: $spec}
   ]')
 
-# Available tool schema
 TOOLS='[
   {
     "type": "function",
@@ -130,26 +116,19 @@ echo "--> Starting Ollama Agent Loop (Max Steps: $MAX_STEPS)..."
 LAST_RESPONSE=""
 
 while true; do
-    # Build payload using stdin to prevent ARG_MAX kernel crashes
     PAYLOAD=$(jq -s --arg model "$MODEL" \
       '{model: $model, messages: .[0], tools: .[1], stream: false}' \
       <(echo "$MESSAGES") <(echo "$TOOLS"))
 
-    # Send request to Ollama
     RESPONSE=$(curl -s "$OLLAMA_URL" -H "Content-Type: application/json" -d "$PAYLOAD")
     LAST_RESPONSE="$RESPONSE"
 
-    # Safely append assistant response to history using stdin
     ASSISTANT_MSG=$(echo "$RESPONSE" | jq '.message')
     MESSAGES=$(jq -s '.[0] + [.[1]]' <(echo "$MESSAGES") <(echo "$ASSISTANT_MSG"))
 
-    # -------------------------------------------------------------
-    # DELEGATED TOOL PARSING (Executed by dedicated model parser)
-    # -------------------------------------------------------------
     TOOL_CALLS_ARRAY=$(bash "$PARSER_FILE" <<< "$RESPONSE")
     NUM_CALLS=$(echo "$TOOL_CALLS_ARRAY" | jq 'length')
 
-    # Exit condition if no actions were detected
     if [ "$NUM_CALLS" -eq 0 ]; then
         echo -e "\n=== Agent Finished Naturally ==="
         echo "$RESPONSE" | jq -r '.message.content'
@@ -158,7 +137,6 @@ while true; do
 
     COMBINED_OUTPUT=""
 
-    # Process extracted tool actions sequentially
     for (( i=0; i<$NUM_CALLS; i++ )); do
         CALL=$(echo "$TOOL_CALLS_ARRAY" | jq ".[$i]")
         TOOL_NAME=$(echo "$CALL" | jq -r '.name')
@@ -171,12 +149,10 @@ while true; do
                 FILENAME=$(echo "$TOOL_ARGS" | jq -r '.filename // empty')
                 CONTENT=$(echo "$TOOL_ARGS" | jq -r '.content // empty')
 
-                # Guard against invalid or null filenames
                 if [ -z "$FILENAME" ] || [ "$FILENAME" = "null" ]; then
                     OUT="Tool Exec Error: Missing or invalid filename. You must provide a valid filename parameter (e.g. 'hashprime.java')."
                     echo "   [ERROR]: Model attempted to write file with null/empty filename. Request rejected."
                 else
-                    # Un-escape newlines cleanly if passed as a literal string
                     FORMATTED_CONTENT=$(python3 -c '
 import sys
 code = sys.stdin.read()
@@ -215,7 +191,7 @@ print(code.strip())
 
             "java")
                 CLASS_NAME=$(echo "$TOOL_ARGS" | jq -r '.class_name // empty')
-                RAW_ARGS=$(echo "$TOOL_ARGS" | jq -r '.args // [] | join(" ")' 2>/dev/null || true)
+                RAW_ARGS=$(echo "$TOOL_ARGS" | jq -r '.args // [] | join(" ")' 2>/devnull || true)
                 
                 if [ -z "$CLASS_NAME" ] || [ "$CLASS_NAME" = "null" ]; then
                     OUT="Execution Error: Missing class_name parameter."
@@ -241,7 +217,6 @@ print(code.strip())
         COMBINED_OUTPUT=$(printf "%s\n%s" "$COMBINED_OUTPUT" "$OUT")
     done
 
-    # Safe string encoding for message history via python stdin
     TOOL_RESPONSE_MSG=$(python3 -c '
 import sys, json
 content = sys.stdin.read()
@@ -259,9 +234,6 @@ print(json.dumps({"role": "tool", "content": content}))
     fi
 done
 
-# ==============================================================================
-# AUTOMATED HARNESS VALIDATION (Compiles & Runs Test Matrix if File Exists)
-# ==============================================================================
 echo "=========================================="
 echo "          AUTOMATED HARNESS VALIDATION    "
 echo "=========================================="
@@ -269,12 +241,9 @@ echo "=========================================="
 if [ -f "hashprime.java" ]; then
     echo "🔍 Found hashprime.java on disk. Starting automated test harness..."
 
-    # Step A: Compile
-    echo "--> [HARNESS]: Compiling hashprime.java..."
     if COMPILE_LOG=$(javac hashprime.java 2>&1); then
         echo "✅ [HARNESS]: Compilation succeeded."
 
-        # Step B: Test N=11
         EXPECTED_11="563d8e0603dcc07d784135d99fd81ff6bf98495e898ec1f52e2e7605320cf6dc"
         ACTUAL_11=$(java hashprime 11 2>&1 | tr -d '\r\n')
         if [ "$ACTUAL_11" = "$EXPECTED_11" ]; then
@@ -283,7 +252,6 @@ if [ -f "hashprime.java" ]; then
             echo "❌ [TEST FAIL]: N=11 -> Expected: $EXPECTED_11 | Got: $ACTUAL_11"
         fi
 
-        # Step C: Test N=1000
         EXPECTED_1000="55542ac8f84d3c795ac05ea7dc3e382353c4bdd519d97e178d3f17a7f97fb25f"
         ACTUAL_1000=$(java hashprime 1000 2>&1 | tr -d '\r\n')
         if [ "$ACTUAL_1000" = "$EXPECTED_1000" ]; then
@@ -292,10 +260,8 @@ if [ -f "hashprime.java" ]; then
             echo "❌ [TEST FAIL]: N=1000 -> Expected: $EXPECTED_1000 | Got: $ACTUAL_1000"
         fi
 
-        # Step D: Invalid Input Handling
         ACTUAL_INVALID=$(java hashprime "" 2>&1 | tr -d '\r\n')
         echo "ℹ️  [HARNESS TEST]: Empty Input -> Returned: '${ACTUAL_INVALID}'"
-
     else
         echo "❌ [HARNESS]: Compilation failed."
         echo "$COMPILE_LOG" | sed 's/^/   | /'
@@ -304,9 +270,6 @@ else
     echo "❌ [HARNESS]: hashprime.java was not found on disk. Skipping validation."
 fi
 
-# ==============================================================================
-# VERBOSE TIMING & TOKEN PERFORMANCE STATS
-# ==============================================================================
 END_TIME=$(date +%s)
 TOTAL_WALL_TIME=$((END_TIME - START_TIME))
 
