@@ -57,10 +57,9 @@ fi
 
 # ======================================================
 # Clean up build artifacts from previous runs
-# User made this change to eliminate contamination before the ruin. 
-# Please DO NOT MODIFY unless error exists. 
-rm -f *.class *.java 2>&1 2>/dev/null 
-# ======================================================
+# User made this change to eliminate contamination before the run.
+# Please DO NOT MODIFY unless error exists.
+rm -f *.class *.java 2>&1 2>/dev/null
 
 echo "--> Reading specification file..."
 SPEC_TEXT=$(cat "$SPEC_FILE")
@@ -259,6 +258,51 @@ print(json.dumps({"role": "tool", "content": content}))
         break
     fi
 done
+
+# ==============================================================================
+# AUTOMATED HARNESS VALIDATION (Compiles & Runs Test Matrix if File Exists)
+# ==============================================================================
+echo "=========================================="
+echo "          AUTOMATED HARNESS VALIDATION    "
+echo "=========================================="
+
+if [ -f "hashprime.java" ]; then
+    echo "🔍 Found hashprime.java on disk. Starting automated test harness..."
+
+    # Step A: Compile
+    echo "--> [HARNESS]: Compiling hashprime.java..."
+    if COMPILE_LOG=$(javac hashprime.java 2>&1); then
+        echo "✅ [HARNESS]: Compilation succeeded."
+
+        # Step B: Test N=11
+        EXPECTED_11="563d8e0603dcc07d784135d99fd81ff6bf98495e898ec1f52e2e7605320cf6dc"
+        ACTUAL_11=$(java hashprime 11 2>&1 | tr -d '\r\n')
+        if [ "$ACTUAL_11" = "$EXPECTED_11" ]; then
+            echo "✅ [TEST PASS]: N=11 -> $ACTUAL_11"
+        else
+            echo "❌ [TEST FAIL]: N=11 -> Expected: $EXPECTED_11 | Got: $ACTUAL_11"
+        fi
+
+        # Step C: Test N=1000
+        EXPECTED_1000="4883963dd4510a29d6df2ffe4dd11e4e1a910e815c7810b200c77b3357f22a28"
+        ACTUAL_1000=$(java hashprime 1000 2>&1 | tr -d '\r\n')
+        if [ "$ACTUAL_1000" = "$EXPECTED_1000" ]; then
+            echo "✅ [TEST PASS]: N=1000 -> $ACTUAL_1000"
+        else
+            echo "❌ [TEST FAIL]: N=1000 -> Expected: $EXPECTED_1000 | Got: $ACTUAL_1000"
+        fi
+
+        # Step D: Invalid Input Handling
+        ACTUAL_INVALID=$(java hashprime "" 2>&1 | tr -d '\r\n')
+        echo "ℹ️  [HARNESS TEST]: Empty Input -> Returned: '${ACTUAL_INVALID}'"
+
+    else
+        echo "❌ [HARNESS]: Compilation failed."
+        echo "$COMPILE_LOG" | sed 's/^/   | /'
+    fi
+else
+    echo "❌ [HARNESS]: hashprime.java was not found on disk. Skipping validation."
+fi
 
 # ==============================================================================
 # VERBOSE TIMING & TOKEN PERFORMANCE STATS
