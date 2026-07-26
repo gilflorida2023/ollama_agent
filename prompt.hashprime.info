@@ -1,76 +1,58 @@
+You are an expert Java developer. Implement a single-file Java CLI program exactly as specified below.
 
-# PRD: hashprime — Prime Hash Generator
+**Project:**
+- Name: hashprime
+- File: hashprime.java
+- Language: Java 17+
+- Dependencies: None (standard library only)
 
-## 1. Overview
+**Requirements:**
 
-- **Project Name**: `hashprime`
-- **File Target**: `hashprime.java` (Single-file source execution / standalone CLI)
-- **Target Environment**: Java 17+ (Standard Library only)
-- **Status**: Specification Final
-- **Core Objective**: Compute the SHA-256 hash of a deterministic ASCII byte stream representing all prime numbers up to N, emitting **only** the hexadecimal digest to stdout.
+**Execution**
+- Command: `java hashprime <N>`
+- Must be a single .java file that compiles and runs with no external jars.
 
----
+**Input**
+- Single command-line argument: integer N (accessed via args[0])
+- Error handling:
+  - If no argument is provided, or the argument is not a valid integer → exit silently with code 0 or 1 (no stack trace, no output to stdout or stderr).
 
-## 2. Technical Architecture & Constraints
+**Output**
+- Print ONLY the 64-character lowercase hexadecimal SHA-256 digest.
+- No extra text, no newlines, no logs, no timestamps.
 
-### 2.1 File & Execution Constraints
-- **Single File Requirement**: Everything must reside within a single source file (`hashprime.java`).
-- **Zero External Dependencies**: Must only use standard Java libraries (`java.security.MessageDigest`, etc.).
-- **CLI Entrypoint**: Executable via `java hashprime <N>`.
+**Byte Stream to Hash**
+- Generate all prime numbers p where 2 ≤ p ≤ N.
+- For each prime, convert it to its base-10 ASCII decimal string (no leading zeros).
+- Append a single newline character '\n' (0x0A) after every prime, including the last one.
+- For N < 2, the stream must be completely empty (0 bytes).
+- Example for N=11: `2\n3\n5\n7\n11\n`
 
-### 2.2 Memory & Performance Guidelines
-- **Target Scale**: Must process $N = 100,000,000$ smoothly within standard JVM memory limitsD:w
- (e.g., `-Xmx512m` or default).
-- **Streaming Hash Aggregation**: 
-  - Do **NOT** construct a gigantic string or byte array in memory for all primes up to $N$.
-  - Primes must be formatted and written incrementally (buffered) directly into a `java.security.MessageDigest` instance.
-- **Prime Generation**: Must use a memory-efficient algorithm.
+**Performance & Memory Constraints (Critical)**
+- Target: N = 100,000,000
+- Must run within standard JVM memory (e.g. -Xmx512m or default limits).
+- Do NOT load all primes into a single String or byte[] in memory.
+- Update the MessageDigest incrementally while generating primes.
+- Use memory-efficient prime generation (e.g. segmented sieve or optimized sieve).
 
----
+**Validation Tests** (must pass exactly):
 
-## 3. Byte Sequence Specification
-
-The byte stream fed into the SHA-256 algorithm must conform **exactly** to the following protocol:
-
-1. **Encoding**:
-   - Convert prime into its base-10 ASCII representation (UTF-8 bytes for characters `'0'` through `'9'`). No leading zeros or spaces.
-   - Append a single ASCII newline character (`\n`, `0x0A`) immediately after each prime's number.
-2. **Trailing Newline**: A newline (`\n`) **must** follow the final prime in the sequence.
-3. **Edge Cases ($N < 2$)**: If $N < 2$, the input byte stream length must be **0 bytes** (SHA-256 computed over an empty stream).
-
-### Example Formatting
-For: java hashprime 11
-- **Prime Sequence**: `2`, `3`, `5`, `7`, `11`
-- **Raw Byte Representation (Hex)**: `32 0A 33 0A 35 0A 37 0A 31 31 0A`
-- **String Equivalent**: `"2\n3\n5\n7\n11\n"`
-
----
-
-## 4. Input & Output Protocol
-
-### Command Line Input (`args[0]`)
-- Accepts a single integer argument representing $N$.
-- **Error Handling**:
-  - If `args` is empty, or `args[0]` cannot be parsed as an integer, output nothing (or exit silently with a non-zero exit code) without crashing with an unhandled exception stack trace.
-
-### Output Protocol
-- Print **only** the 64-character, hexadecimal SHA-256 digest to standard output (`System.out`).
-- **Zero Overhead**: Do NOT output execution time, memory logs, prompts, or extra trailing newlines.
+| Input   | Expected SHA-256 Output                                      |
+|---------|--------------------------------------------------------------|
+| -5      | e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 |
+| 0       | e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 |
+| 1       | e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 |
+| 11      | 563d8e0603dcc07d784135d99fd81ff6bf98495e898ec1f52e2e7605320cf6dc |
+| 12      | 563d8e0603dcc07d784135d99fd81ff6bf98495e898ec1f52e2e7605320cf6dc |
+| 1000000 | 4883963dd4510a29d6df2ffe4dd11e4e1a910e815c7810b200c77b3357f22a28 |
+| 10000000| 36d6197802bc3b635b43b31cd6a2583f7cf8f5badff7992f3693c5102beefd14 |
 
 ---
 
-## 5. Validation Test Matrix
+**Instructions for you:**
+1. First, output the complete `hashprime.java` source code.
+2. Then show the exact commands to compile and test it.
+3. Verify the validation tests above.
+4. Only after successful tests, confirm completion.
 
- java hashprime -5        -> e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
- java hashprime 0         -> e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
- java hashprime 1         -> e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
- java hashprime 11        -> 563d8e0603dcc07d784135d99fd81ff6bf98495e898ec1f52e2e7605320cf6dc
- java hashprime 12        -> 563d8e0603dcc07d784135d99fd81ff6bf98495e898ec1f52e2e7605320cf6dc
- java hashprime 1000000   -> 4883963dd4510a29d6df2ffe4dd11e4e1a910e815c7810b200c77b3357f22a28
- java hashprime `10000000 -> 36d6197802bc3b635b43b31cd6a2583f7cf8f5badff7992f3693c5102beefd14
-
-## 6. Definition of Done
-
-1. Compiles cleanly with standard `javac hashprime.java` without warnings.
-2. Passes all validation cases with exact hash string matches.
-3. Successfully computes $N = 100,000,000$ in under 5 seconds on modern hardware without throwing `OutOfMemoryError`.
+Respond with clean, copy-pasteable code blocks. Do not add extra commentary outside the requested code and commands.

@@ -45,11 +45,6 @@ kill_ollama_models() {
 }
 # =====================================================
 
-echo "=========================================="
-echo "--> Cleanup running models"
-echo "=========================================="
-
-kill_ollama_models
 
 echo "=========================================="
 echo "--> Starting next tasks..."
@@ -57,9 +52,17 @@ echo "=========================================="
 
 # ←←← Your other code continues here
 # echo "test"
-
+set +H
 for i in $(ollama list | grep -Ev 'NAME|embed' | sed -e 's/ .*//'); do
     filename="logs/$(echo "$i" | tr ':/' '_')_$(date +'%a_%b_%d_%H_%M_%S_%Z_%Y').txt"
     echo "Writing ${filename}"
-    bash ./complete.sh "$i" 2>&1 | tee "${filename}"
+    #bash ./complete.sh "$i" 2>&1 | tee "${filename}"
+    #bash ./model_profiler_script.bash "$i" 2>&1 | tee "${filename}"
+    echo "=========================================="
+    echo "--> Cleanup running models"
+    echo "=========================================="
+
+    kill_ollama_models
+    sleep 1
+    bash ./complete.sh  "$i" 2>&1 | tee "${filename}"
 done

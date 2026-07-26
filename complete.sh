@@ -1,21 +1,25 @@
 #!/usr/bin/env bash
 
+# Disable history expansion so '!' in Java code preview logs won't break Bash
+set +H
+
 # Exit immediately if an unhandled command error occurs
 set -e
 
-# 1. Target model passed as parameter ($1) or fallback to default
+# Target model passed as parameter ($1) or fallback to default
 MODEL="${1:-qwen2.5-coder:7b}"
 SPEC_FILE="prompt.hashprime.info"
 OLLAMA_URL="http://localhost:11434/api/chat"
 
+# Directories and paths
+CONFIG_DIR=".configs"
+SANITIZED_MODEL=$(echo "$MODEL" | sed 's/[/:]/_/g')
+PARSER_FILE="$CONFIG_DIR/${SANITIZED_MODEL}.sh"
+
 # Maximum tool-call turns allowed per model
 MAX_STEPS=10
 STEP_COUNT=0
-
-# Metrics Tracking Counters
-TOTAL_PROMPT_TOKENS=0
-TOTAL_EVAL_TOKENS=0
-TOTAL_DURATION_NS=0
+START_TIME=$(date +%s)
 
 echo "=========================================="
 echo "--> Preloading/Warming model into memory: $MODEL..."
@@ -35,8 +39,15 @@ curl -s "$OLLAMA_URL" \
 
 echo "✅ Model preloaded successfully."
 
+# Ensure a dedicated parser exists; auto-profile if missing
+if [ ! -f "$PARSER_FILE" ]; then
+    echo "⚠️  No parser profile found for $MODEL. Running profile_model.sh..."
+    bash ./profile_model.sh "$MODEL"
+fi
+
 echo "=========================================="
 echo "--> Running evaluation for model: $MODEL"
+echo "⚡ Using dedicated parser: $PARSER_FILE"
 echo "=========================================="
 
 if [ ! -f "$SPEC_FILE" ]; then
@@ -44,15 +55,19 @@ if [ ! -f "$SPEC_FILE" ]; then
     exit 1
 fi
 
+# ======================================================
 # Clean up build artifacts from previous runs
-rm -f *.class hashprime.java hashprime_large.java
+# User made this change to eliminate contamination before the ruin. 
+# Please DO NOT MODIFY unless error exists. 
+rm -f *.class *.java 2>&1 2>/dev/null 
+# ======================================================
 
 echo "--> Reading specification file..."
 SPEC_TEXT=$(cat "$SPEC_FILE")
 
-SYSTEM_PROMPT="You are an automated software engineer. You MUST execute actions by issuing function calls for write_file, javac, and java. Test N=11 and N=1000, then stop."
+SYSTEM_PROMPT="You are an automated software engineer. ALWAYS follow this strict action sequence: 1) write_file, 2) javac, 3) java. Never attempt to run 'java' before 'javac' succeeds. Test N=11 and N=1000, then stop."
 
-# Initialize conversation history
+# Initialize conversation history safely using stdin
 MESSAGES=$(jq -n \
   --arg sys "$SYSTEM_PROMPT" \
   --arg spec "$SPEC_TEXT" \
@@ -113,93 +128,26 @@ TOOLS='[
 ]'
 
 echo "--> Starting Ollama Agent Loop (Max Steps: $MAX_STEPS)..."
+LAST_RESPONSE=""
 
 while true; do
-    # Build payload
-    PAYLOAD=$(jq -n \
-      --arg model "$MODEL" \
-      --argjson messages "$MESSAGES" \
-      --argjson tools "$TOOLS" \
-      '{model: $model, messages: $messages, tools: $tools, stream: false}')
+    # Build payload using stdin to prevent ARG_MAX kernel crashes
+    PAYLOAD=$(jq -s --arg model "$MODEL" \
+      '{model: $model, messages: .[0], tools: .[1], stream: false}' \
+      <(echo "$MESSAGES") <(echo "$TOOLS"))
 
     # Send request to Ollama
     RESPONSE=$(curl -s "$OLLAMA_URL" -H "Content-Type: application/json" -d "$PAYLOAD")
+    LAST_RESPONSE="$RESPONSE"
 
-    # Accumulate Performance & Token Metrics
-    P_TOKENS=$(echo "$RESPONSE" | jq -r '.prompt_eval_count // 0')
-    E_TOKENS=$(echo "$RESPONSE" | jq -r '.eval_count // 0')
-    DUR_NS=$(echo "$RESPONSE" | jq -r '.total_duration // 0')
-
-    TOTAL_PROMPT_TOKENS=$((TOTAL_PROMPT_TOKENS + P_TOKENS))
-    TOTAL_EVAL_TOKENS=$((TOTAL_EVAL_TOKENS + E_TOKENS))
-    TOTAL_DURATION_NS=$((TOTAL_DURATION_NS + DUR_NS))
-
-    # Record assistant response in conversation history
+    # Safely append assistant response to history using stdin
     ASSISTANT_MSG=$(echo "$RESPONSE" | jq '.message')
-    MESSAGES=$(echo "$MESSAGES" | jq --argjson msg "$ASSISTANT_MSG" '. + [$msg]')
+    MESSAGES=$(jq -s '.[0] + [.[1]]' <(echo "$MESSAGES") <(echo "$ASSISTANT_MSG"))
 
     # -------------------------------------------------------------
-    # UNIFIED MULTI-FORMAT TOOL EXTRACTOR (Python Stream Parser)
+    # DELEGATED TOOL PARSING (Executed by dedicated model parser)
     # -------------------------------------------------------------
-    TOOL_CALLS_ARRAY=$(python3 -c '
-import sys, json, re
-
-try:
-    data = json.load(sys.stdin)
-except Exception:
-    print("[]")
-    sys.exit(0)
-
-tool_calls = []
-
-# 1. Check Native Tool Calls
-native = data.get("message", {}).get("tool_calls", [])
-if native:
-    for tc in native:
-        func = tc.get("function", {})
-        tool_calls.append({"name": func.get("name"), "arguments": func.get("arguments")})
-
-# 2. Check Embedded Multi-Line JSON Objects
-if not tool_calls:
-    content = data.get("message", {}).get("content", "") or ""
-    decoder = json.JSONDecoder()
-    pos = 0
-    while pos < len(content):
-        match = content.find("{", pos)
-        if match == -1:
-            break
-        try:
-            obj, end = decoder.raw_decode(content[match:])
-            if isinstance(obj, dict) and "name" in obj:
-                args = obj.get("arguments", {})
-                tool_calls.append({"name": obj["name"], "arguments": args})
-            pos = match + end
-        except Exception:
-            pos = match + 1
-
-# 3. Check XML Tags (Fallback for Heretic / Claude-style models)
-if not tool_calls:
-    content = data.get("message", {}).get("content", "") or ""
-    
-    # <write_file filename="..." content="...">
-    for fn, cnt in re.findall(r"<write_file\s+filename=\"([^\"]+)\"\s+content=\"([^\"]+)\"", content, re.DOTALL):
-        tool_calls.append({"name": "write_file", "arguments": {"filename": fn, "content": cnt}})
-    
-    # <javac filename="...">
-    for fn in re.findall(r"<javac\s+filename=\"([^\"]+)\"", content):
-        tool_calls.append({"name": "javac", "arguments": {"filename": fn}})
-    
-    # <java class_name="..." args="...">
-    for cn, args_str in re.findall(r"<java\s+class_name=\"([^\"]+)\"(?:\s+args=\"([^\"]+)\")?", content):
-        try:
-            args = json.loads(args_str.replace("\\\"", "\"")) if args_str else []
-        except Exception:
-            args = [args_str] if args_str else []
-        tool_calls.append({"name": "java", "arguments": {"class_name": cn, "args": args}})
-
-print(json.dumps(tool_calls))
-' <<< "$RESPONSE")
-
+    TOOL_CALLS_ARRAY=$(bash "$PARSER_FILE" <<< "$RESPONSE")
     NUM_CALLS=$(echo "$TOOL_CALLS_ARRAY" | jq 'length')
 
     # Exit condition if no actions were detected
@@ -221,32 +169,69 @@ print(json.dumps(tool_calls))
 
         case "$TOOL_NAME" in
             "write_file")
-                FILENAME=$(echo "$TOOL_ARGS" | jq -r '.filename')
-                CONTENT=$(echo "$TOOL_ARGS" | jq -r '.content')
-                echo "   [EXEC]: Writing file '$FILENAME'..."
-                printf "%s" "$CONTENT" > "$FILENAME"
-                OUT="File $FILENAME written successfully."
+                FILENAME=$(echo "$TOOL_ARGS" | jq -r '.filename // empty')
+                CONTENT=$(echo "$TOOL_ARGS" | jq -r '.content // empty')
+
+                # Guard against invalid or null filenames
+                if [ -z "$FILENAME" ] || [ "$FILENAME" = "null" ]; then
+                    OUT="Tool Exec Error: Missing or invalid filename. You must provide a valid filename parameter (e.g. 'hashprime.java')."
+                    echo "   [ERROR]: Model attempted to write file with null/empty filename. Request rejected."
+                else
+                    # Un-escape newlines cleanly if passed as a literal string
+                    FORMATTED_CONTENT=$(python3 -c '
+import sys
+code = sys.stdin.read()
+if "\\n" in code and "\n" not in code:
+    code = code.encode().decode("unicode_escape")
+print(code.strip())
+' <<< "$CONTENT")
+
+                    echo "   [EXEC]: Writing file '$FILENAME'..."
+                    printf "%s\n" "$FORMATTED_CONTENT" > "$FILENAME"
+
+                    echo "   --- [FILE CONTENT PREVIEW] ---"
+                    echo "$FORMATTED_CONTENT" | sed 's/^/   | /'
+                    echo "   ------------------------------"
+
+                    OUT="File '$FILENAME' written successfully."
+                fi
                 ;;
 
             "javac")
-                FILENAME=$(echo "$TOOL_ARGS" | jq -r '.filename')
-                echo "   [EXEC]: javac $FILENAME"
-                if COMPILE_ERR=$(javac "$FILENAME" 2>&1); then
-                    OUT="Compilation successful."
-                    echo "   [SUCCESS]: Compiled cleanly."
+                FILENAME=$(echo "$TOOL_ARGS" | jq -r '.filename // empty')
+                if [ -z "$FILENAME" ] || [ "$FILENAME" = "null" ]; then
+                    OUT="Compilation Error: Missing filename parameter."
+                    echo "   [ERROR]: Missing filename for javac."
                 else
-                    OUT="Compilation failed:\n$COMPILE_ERR"
-                    echo "   [ERROR]: Compilation failed."
+                    echo "   [EXEC]: javac $FILENAME"
+                    if COMPILE_ERR=$(javac "$FILENAME" 2>&1); then
+                        OUT="Compilation successful. You can now execute the compiled class using 'java'."
+                        echo "   [SUCCESS]: Compiled cleanly."
+                    else
+                        OUT="Compilation failed with error:\n$COMPILE_ERR\nPlease fix the source code using 'write_file' and re-compile."
+                        echo "   [ERROR]: Compilation failed."
+                    fi
                 fi
                 ;;
 
             "java")
-                CLASS_NAME=$(echo "$TOOL_ARGS" | jq -r '.class_name')
+                CLASS_NAME=$(echo "$TOOL_ARGS" | jq -r '.class_name // empty')
                 RAW_ARGS=$(echo "$TOOL_ARGS" | jq -r '.args // [] | join(" ")' 2>/dev/null || true)
-                echo "   [EXEC]: java $CLASS_NAME $RAW_ARGS"
-                RUN_OUT=$(java $CLASS_NAME $RAW_ARGS 2>&1 || true)
-                OUT="Program Output:\n$RUN_OUT"
-                echo "   [PROGRAM OUTPUT]: $RUN_OUT"
+                
+                if [ -z "$CLASS_NAME" ] || [ "$CLASS_NAME" = "null" ]; then
+                    OUT="Execution Error: Missing class_name parameter."
+                    echo "   [ERROR]: Missing class_name for java tool."
+                else
+                    echo "   [EXEC]: java $CLASS_NAME $RAW_ARGS"
+                    RUN_OUT=$(java $CLASS_NAME $RAW_ARGS 2>&1 || true)
+
+                    if echo "$RUN_OUT" | grep -q "ClassNotFoundException"; then
+                        OUT="Program Execution Failed:\n$RUN_OUT\nHINT: Class '$CLASS_NAME.class' was not found. Ensure you call 'write_file' to save the Java source code and 'javac' to compile it before calling 'java'."
+                    else
+                        OUT="Program Output:\n$RUN_OUT"
+                    fi
+                    echo "   [PROGRAM OUTPUT]: $RUN_OUT"
+                fi
                 ;;
 
             *)
@@ -257,11 +242,15 @@ print(json.dumps(tool_calls))
         COMBINED_OUTPUT=$(printf "%s\n%s" "$COMBINED_OUTPUT" "$OUT")
     done
 
-    # Safe string encoding for message history
-    TOOL_RESPONSE_MSG=$(jq -n --arg content "$COMBINED_OUTPUT" '{role: "tool", content: $content}')
-    MESSAGES=$(echo "$MESSAGES" | jq --argjson msg "$TOOL_RESPONSE_MSG" '. + [$msg]')
+    # Safe string encoding for message history via python stdin
+    TOOL_RESPONSE_MSG=$(python3 -c '
+import sys, json
+content = sys.stdin.read()
+print(json.dumps({"role": "tool", "content": content}))
+' <<< "$COMBINED_OUTPUT")
 
-    # Step limit guard
+    MESSAGES=$(jq -s '.[0] + [.[1]]' <(echo "$MESSAGES") <(echo "$TOOL_RESPONSE_MSG"))
+
     STEP_COUNT=$((STEP_COUNT + 1))
     echo "   [STEP COUNT]: $STEP_COUNT / $MAX_STEPS"
 
@@ -272,27 +261,24 @@ print(json.dumps(tool_calls))
 done
 
 # ==============================================================================
-# FINAL EVALUATION SUMMARY REPORT
+# VERBOSE TIMING & TOKEN PERFORMANCE STATS
 # ==============================================================================
+END_TIME=$(date +%s)
+TOTAL_WALL_TIME=$((END_TIME - START_TIME))
 
-# Calculate elapsed time in seconds with decimal precision
-TOTAL_SECS=$(awk -v ns="$TOTAL_DURATION_NS" 'BEGIN { printf "%.2f", ns / 1000000000 }')
-TOTAL_TOKENS=$((TOTAL_PROMPT_TOKENS + TOTAL_EVAL_TOKENS))
+if [ -n "$LAST_RESPONSE" ]; then
+    EVAL_COUNT=$(echo "$LAST_RESPONSE" | jq -r '.eval_count // 0')
+    EVAL_DURATION=$(echo "$LAST_RESPONSE" | jq -r '.eval_duration // 0')
 
-# Calculate Tokens Per Second (TPS)
-if [ "$(echo "$TOTAL_SECS > 0" | awk '{print ($1 > 0)}')" -eq 1 ]; then
-    TPS=$(awk -v tok="$TOTAL_EVAL_TOKENS" -v sec="$TOTAL_SECS" 'BEGIN { printf "%.2f", tok / sec }')
-else
-    TPS="0.00"
+    echo "=========================================="
+    echo "            MODEL BENCHMARK STATS         "
+    echo "=========================================="
+    echo "Wall Clock Time:  ${TOTAL_WALL_TIME}s"
+    
+    if [ "$EVAL_COUNT" -gt 0 ] && [ "$EVAL_DURATION" -gt 0 ]; then
+        SPEED=$(python3 -c "print(round($EVAL_COUNT / ($EVAL_DURATION / 1e9), 2))")
+        echo "Total Tokens:     $EVAL_COUNT"
+        echo "Generation Speed: $SPEED tokens/sec"
+    fi
+    echo "=========================================="
 fi
-
-echo -e "\n=========================================="
-echo "📊 PERFORMANCE REPORT: $MODEL"
-echo "=========================================="
-echo " Total Steps Taken:    $STEP_COUNT / $MAX_STEPS"
-echo " Total Elapsed Time:   ${TOTAL_SECS}s"
-echo " Prompt Tokens:        $TOTAL_PROMPT_TOKENS"
-echo " Generated Tokens:     $TOTAL_EVAL_TOKENS"
-echo " Total Tokens:         $TOTAL_TOKENS"
-echo " Generation Speed:     ${TPS} tokens/sec"
-echo "=========================================="
