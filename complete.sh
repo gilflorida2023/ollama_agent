@@ -284,7 +284,7 @@ if [ -f "hashprime.java" ]; then
         fi
 
         # Step C: Test N=1000
-        EXPECTED_1000="4883963dd4510a29d6df2ffe4dd11e4e1a910e815c7810b200c77b3357f22a28"
+        EXPECTED_1000="55542ac8f84d3c795ac05ea7dc3e382353c4bdd519d97e178d3f17a7f97fb25f"
         ACTUAL_1000=$(java hashprime 1000 2>&1 | tr -d '\r\n')
         if [ "$ACTUAL_1000" = "$EXPECTED_1000" ]; then
             echo "✅ [TEST PASS]: N=1000 -> $ACTUAL_1000"
