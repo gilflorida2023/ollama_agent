@@ -215,7 +215,7 @@ generate_task_prompt() {
              PASSING_TASKS="$passing_tasks" VERIFY_CMD="$verify_cmd" \
              EXPECTED_OUT="$expected_out" TMPL_FILE="$tmpl" \
              python3 << 'PYEOF'
-import os
+import os, sys
 with open(os.environ['TMPL_FILE']) as f:
     t = f.read()
 t = t.replace('{{TASK_ID}}', os.environ['TASK_ID'])
@@ -361,6 +361,7 @@ while [ $TURN -le $MAX_TURNS ]; do
         echo "  -> Task $TASK_ID FAILED — rolling back"
         echo "Result: FAIL (rolled back)" >> "$PROGRESS_FILE"
         git reset --hard HEAD
+        rm -f *.java *.class 2>/dev/null || true
         echo "  Rolled back to last good commit on $BRANCH_NAME"
     fi
 
