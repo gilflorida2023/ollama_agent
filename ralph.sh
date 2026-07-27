@@ -248,9 +248,11 @@ PYEOF
 TURN=1
 
 while [ $TURN -le $MAX_TURNS ]; do
+    TURN_START=$(date +%s)
+    TS_HUMAN=$(date +"%Y-%m-%d %H:%M:%S")
     echo ""
     echo "--------------------------------------------------"
-    echo "Turn $TURN of $MAX_TURNS (branch: $BRANCH_NAME)"
+    echo "Turn $TURN of $MAX_TURNS (branch: $BRANCH_NAME) @ $TS_HUMAN"
     echo "--------------------------------------------------"
 
     REMAINING=$(jq '[.tasks[] | select(.status == "failing")] | length' "$TASKS_FILE")
@@ -274,9 +276,8 @@ while [ $TURN -le $MAX_TURNS ]; do
     echo "Task: $TASK_ID"
     echo "  $TASK_DESC"
 
-    TIMESTAMP=$(date +"%Y-%m-%d %H:%M:%S")
     {
-        echo "## Turn $TURN ($TIMESTAMP)"
+        echo "## Turn $TURN ($TS_HUMAN)"
         echo "Model: $MODEL"
         echo "Branch: $BRANCH_NAME"
         echo "Task: $TASK_ID - $TASK_DESC"
@@ -289,7 +290,8 @@ while [ $TURN -le $MAX_TURNS ]; do
     generate_task_prompt "$TASK_ID" "$TASK_DESC" "$VERIFY_CMD" "$EXPECTED_OUT" "$PASSING_TASKS"
 
     echo ""
-    echo "Invoking complete.sh with task-focused prompt..."
+    echo "--- Starting fresh worker session (up to 10 tool steps per session) ---"
+    echo "  Spawning: ../complete.sh $MODEL"
 
     set +eo pipefail
     ../complete.sh "$MODEL"
@@ -344,7 +346,7 @@ while [ $TURN -le $MAX_TURNS ]; do
 
         {
             echo ""
-            echo "## Turn $TURN ($TIMESTAMP)"
+            echo "## Turn $TURN ($TS_HUMAN)"
             echo "- **$TASK_ID**: passed"
         } >> "$CHANGELOG_FILE"
 
@@ -364,6 +366,10 @@ while [ $TURN -le $MAX_TURNS ]; do
         rm -f *.java *.class 2>/dev/null || true
         echo "  Rolled back to last good commit on $BRANCH_NAME"
     fi
+
+    TURN_END=$(date +%s)
+    TURN_DURATION=$((TURN_END - TURN_START))
+    echo "  Turn $TURN duration: ${TURN_DURATION}s | Result: $([ "$PASS" = true ] && echo 'PASS' || echo 'FAIL (rolled back)') | Task: $TASK_ID"
 
     TURN=$((TURN + 1))
 done
