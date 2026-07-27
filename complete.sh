@@ -69,7 +69,7 @@ CLASS_TOKEN="${EXPECTED_FILENAME%.java}"
 
 echo "--> Spec requests file: $EXPECTED_FILENAME"
 
-SYSTEM_PROMPT="You are an automated software engineer. ALWAYS follow this strict action sequence: 1) write_file (filename=$EXPECTED_FILENAME), 2) javac $EXPECTED_FILENAME, 3) java $CLASS_TOKEN <N>. Never attempt to run 'java' before 'javac' succeeds. Test N=11 and N=1000, then stop."
+SYSTEM_PROMPT=$(sed "s/{{FILENAME}}/$EXPECTED_FILENAME/g; s/{{CLASS_TOKEN}}/$CLASS_TOKEN/g" prompts/system.txt)
 
 MESSAGES=$(jq -n \
   --arg sys "$SYSTEM_PROMPT" \

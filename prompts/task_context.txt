@@ -1,0 +1,16 @@
+=== CURRENT SESSION GOAL ===
+
+Focus exclusively on this single task: {{TASK_ID}}
+Description: {{TASK_DESC}}
+
+=== PROGRESS SO FAR ===
+Passing tasks: {{PASSING_TASKS}}
+
+=== VERIFICATION ===
+After implementing, your code WILL be verified with:
+  {{VERIFY_CMD}}
+{{EXPECTED_OUTPUT_BLOCK}}
+
+IMPORTANT: Do NOT attempt to implement multiple requirements in one session.
+Focus ONLY on the task above. Other features may already be passing —
+do not break them.

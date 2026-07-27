@@ -34,6 +34,10 @@ for f in complete.sh parser.py profile_model.sh; do
     fi
 done
 
+if [ ! -L "$SANDBOX_DIR/prompts" ] && [ ! -d "$SANDBOX_DIR/prompts" ]; then
+    ln -s "../prompts" "$SANDBOX_DIR/prompts"
+fi
+
 if [ ! -L "$SANDBOX_DIR/$CONFIG_DIR" ] && [ ! -d "$SANDBOX_DIR/$CONFIG_DIR" ]; then
     ln -s "../$CONFIG_DIR" "$SANDBOX_DIR/$CONFIG_DIR"
 fi
@@ -202,36 +206,36 @@ fi
 # Helper: generate task-focused prompt for the LLM
 # ---------------------------------------------------------------------------
 generate_task_prompt() {
-    local task_id="$1"
-    local task_desc="$2"
-    local verify_cmd="$3"
-    local expected_out="$4"
-    local passing_tasks="$5"
+    local task_id="$1" task_desc="$2" verify_cmd="$3" expected_out="$4" passing_tasks="$5"
+    local tmpl="prompts/task_context.txt"
 
-    # Read original spec from the project root
+    # Substitute template placeholders safely via python3
+    local header
+    header=$(TASK_ID="$task_id" TASK_DESC="$task_desc" \
+             PASSING_TASKS="$passing_tasks" VERIFY_CMD="$verify_cmd" \
+             EXPECTED_OUT="$expected_out" TMPL_FILE="$tmpl" \
+             python3 << 'PYEOF'
+import os
+with open(os.environ['TMPL_FILE']) as f:
+    t = f.read()
+t = t.replace('{{TASK_ID}}', os.environ['TASK_ID'])
+t = t.replace('{{TASK_DESC}}', os.environ['TASK_DESC'])
+t = t.replace('{{PASSING_TASKS}}', os.environ['PASSING_TASKS'])
+t = t.replace('{{VERIFY_CMD}}', os.environ['VERIFY_CMD'])
+exp = os.environ.get('EXPECTED_OUT', '')
+if exp:
+    t = t.replace('{{EXPECTED_OUTPUT_BLOCK}}', 'Expected output:\n  ' + exp)
+else:
+    t = t.replace('{{EXPECTED_OUTPUT_BLOCK}}\n', '')
+sys.stdout.write(t)
+PYEOF
+)
+
     local real_spec
     real_spec=$(cat "../$SPEC_FILE" 2>/dev/null || cat "$SPEC_FILE" 2>/dev/null || echo "Spec file not found.")
 
     {
-        echo "=== CURRENT SESSION GOAL ==="
-        echo ""
-        echo "Focus exclusively on this single task: $task_id"
-        echo "Description: $task_desc"
-        echo ""
-        echo "=== PROGRESS SO FAR ==="
-        echo "Passing tasks: $passing_tasks"
-        echo ""
-        echo "=== VERIFICATION ==="
-        echo "After implementing, your code WILL be verified with:"
-        echo "  $verify_cmd"
-        if [ -n "$expected_out" ]; then
-            echo "Expected output:"
-            echo "  $expected_out"
-        fi
-        echo ""
-        echo "IMPORTANT: Do NOT attempt to implement multiple requirements in one session."
-        echo "Focus ONLY on the task above. Other features may already be passing —"
-        echo "do not break them."
+        echo "$header"
         echo ""
         echo "--- ORIGINAL SPECIFICATION FOLLOWS ---"
         echo "$real_spec"
