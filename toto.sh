@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-rm -rf logs/ 
+rm -rf logs/  ./configs/
 # Create logs directory
 if ! [ -d 'logs' ]; then
     echo "Created logs directory"

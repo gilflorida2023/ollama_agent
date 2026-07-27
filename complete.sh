@@ -57,7 +57,19 @@ rm -f *.class *.java 2>&1 >/dev/null || true
 echo "--> Reading specification file..."
 SPEC_TEXT=$(cat "$SPEC_FILE")
 
-SYSTEM_PROMPT="You are an automated software engineer. ALWAYS follow this strict action sequence: 1) write_file, 2) javac, 3) java. Never attempt to run 'java' before 'javac' succeeds. Test N=11 and N=1000, then stop."
+shopt -s nocasematch
+if [[ "$SPEC_TEXT" =~ File:[[:space:]]*([^[:space:]]+\.java) ]]; then
+    EXPECTED_FILENAME="${BASH_REMATCH[1]}"
+else
+    EXPECTED_FILENAME="hashprime.java"
+fi
+shopt -u nocasematch
+
+CLASS_TOKEN="${EXPECTED_FILENAME%.java}"
+
+echo "--> Spec requests file: $EXPECTED_FILENAME"
+
+SYSTEM_PROMPT="You are an automated software engineer. ALWAYS follow this strict action sequence: 1) write_file (filename=$EXPECTED_FILENAME), 2) javac $EXPECTED_FILENAME, 3) java $CLASS_TOKEN <N>. Never attempt to run 'java' before 'javac' succeeds. Test N=11 and N=1000, then stop."
 
 MESSAGES=$(jq -n \
   --arg sys "$SYSTEM_PROMPT" \
@@ -67,55 +79,80 @@ MESSAGES=$(jq -n \
     {role: "user", content: $spec}
   ]')
 
-TOOLS='[
-  {
-    "type": "function",
-    "function": {
-      "name": "write_file",
-      "description": "Writes Java source code to disk.",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "filename": { "type": "string" },
-          "content": { "type": "string" }
-        },
-        "required": ["filename", "content"]
+TOOLS=$(jq -n \
+  --arg fn "$EXPECTED_FILENAME" \
+  --arg cn "$CLASS_TOKEN" \
+  '[
+    {
+      "type": "function",
+      "function": {
+        "name": "write_file",
+        "description": "Creates or overwrites a Java source file on disk. Use this first - before javac or java. Always provide both filename (ending in .java) and content (valid Java source code matching the filename).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "filename": {
+              "type": "string",
+              "description": ("Target filename for the Java source file. Must end with .java. The spec requires " + $fn + " - use that exact value. Do not use paths like ./src/ - write to the current directory."),
+              "pattern": "^.+\\.java$",
+              "minLength": 1,
+              "examples": [$fn]
+            },
+            "content": {
+              "type": "string",
+              "description": ("Full Java source code to write. Must include a public class <ClassName> declaration where ClassName matches the filename (e.g. public class " + $cn + " for " + $fn + "). Use Java 17+ syntax. No external dependencies - standard library only.")
+            }
+          },
+          "required": ["filename", "content"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "javac",
+        "description": "Compiles a .java file that already exists on disk (created by a prior write_file call). The class file output will be in the same directory. Only proceed to java after this succeeds. If compilation fails, use write_file again to fix errors.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "filename": {
+              "type": "string",
+              "description": ("Name of the .java file to compile. Must match a file you already created with write_file. The spec expects " + $fn + "."),
+              "pattern": "^.+\\.java$",
+              "minLength": 1,
+              "examples": [$fn]
+            }
+          },
+          "required": ["filename"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "java",
+        "description": "Runs a compiled Java class (must have called javac successfully first). Do not call this before javac completes without errors. The args array holds command-line arguments for the program main(String[]) method.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "class_name": {
+              "type": "string",
+              "description": ("Name of the compiled class to run. Do not add .class extension. Must match the public class declaration in your .java file and equal the filename without extension. For " + $fn + ", use " + $cn + ". Do not include packages - the file has no package declaration."),
+              "minLength": 1,
+              "examples": [$cn]
+            },
+            "args": {
+              "type": "array",
+              "description": "Arguments passed to the Java main method. The spec expects an integer N as the first argument. Example: [\"11\"] for N=11, [\"1000\"] for N=1000, [\"-1\"] for the empty-stream test. Pass exactly one string per argument.",
+              "items": { "type": "string" },
+              "examples": [["11"], ["1000"], ["-1"]]
+            }
+          },
+          "required": ["class_name"]
+        }
       }
     }
-  },
-  {
-    "type": "function",
-    "function": {
-      "name": "javac",
-      "description": "Compiles a Java source file.",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "filename": { "type": "string" }
-        },
-        "required": ["filename"]
-      }
-    }
-  },
-  {
-    "type": "function",
-    "function": {
-      "name": "java",
-      "description": "Runs a compiled Java class.",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "class_name": { "type": "string" },
-          "args": { 
-            "type": "array", 
-            "items": { "type": "string" }
-          }
-        },
-        "required": ["class_name"]
-      }
-    }
-  }
-]'
+  ]')
 
 echo "--> Starting Ollama Agent Loop (Max Steps: $MAX_STEPS)..."
 LAST_RESPONSE=""
@@ -143,6 +180,62 @@ while true; do
             echo "⚠️  No tool calls detected on first turn — retrying once..."
             continue
         fi
+
+        CONTENT=$(echo "$RESPONSE" | jq -r '.message.content // ""')
+        if echo "$CONTENT" | grep -q '\`\`\`sh'; then
+            echo "📦 Parsing \`\`\`sh code block..."
+            COMMANDS=$(echo "$CONTENT" | sed -n '/```sh/,/```/{//!p}' | sed '/^$/d')
+
+            ASSISTANT_MSG=$(echo "$RESPONSE" | jq '.message')
+            MESSAGES=$(jq -s '.[0] + [.[1]]' <(echo "$MESSAGES") <(echo "$ASSISTANT_MSG"))
+
+            COMBINED_OUTPUT=""
+            while IFS= read -r CMD; do
+                [ -z "$CMD" ] && continue
+                read -r CMD_NAME REST <<< "$CMD"
+                case "$CMD_NAME" in
+                    javac)
+                        echo "   [PARSED]: javac $REST"
+                        if COMPILE_ERR=$(javac $REST 2>&1); then
+                            OUT="Compilation successful."
+                            echo "   [SUCCESS]: Compiled cleanly."
+                        else
+                            OUT="Compilation failed with error:\n$COMPILE_ERR"
+                            echo "   [ERROR]: Compilation failed."
+                        fi
+                        ;;
+                    java)
+                        echo "   [PARSED]: java $REST"
+                        RUN_OUT=$(java $REST 2>&1 || true)
+                        OUT="Program Output:\n$RUN_OUT"
+                        echo "   [PROGRAM OUTPUT]: $RUN_OUT"
+                        ;;
+                    *)
+                        echo "   [SKIP]: unknown command '$CMD_NAME'"
+                        continue
+                        ;;
+                esac
+                COMBINED_OUTPUT=$(printf "%s\n%s" "$COMBINED_OUTPUT" "$OUT")
+            done <<< "$COMMANDS"
+
+            TOOL_RESPONSE_MSG=$(python3 -c '
+import sys, json
+content = sys.stdin.read()
+print(json.dumps({"role": "tool", "content": content}))
+' <<< "$COMBINED_OUTPUT")
+            MESSAGES=$(jq -s '.[0] + [.[1]]' <(echo "$MESSAGES") <(echo "$TOOL_RESPONSE_MSG"))
+
+            STEP_COUNT=$((STEP_COUNT + 1))
+            echo "   [STEP COUNT]: $STEP_COUNT / $MAX_STEPS"
+
+            if [ "$STEP_COUNT" -ge "$MAX_STEPS" ]; then
+                echo -e "\n=== Maximum Steps ($MAX_STEPS) Reached for Model $MODEL. Terminating. ==="
+                break
+            fi
+            MISSING_COUNT=0
+            continue
+        fi
+
         echo -e "\n=== Agent Finished Naturally ==="
         echo "$RESPONSE" | jq -r '.message.content'
         break
