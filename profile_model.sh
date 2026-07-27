@@ -84,106 +84,39 @@ TOOLS='[
   }
 ]'
 
+PAYLOAD_TEMPLATE='{model: $model, messages: .[0], tools: .[1], stream: false, temperature: 0, think: false}'
+
 PAYLOAD=$(jq -s --arg model "$MODEL" \
-  '{model: $model, messages: .[0], tools: .[1], stream: false}' \
+  "$PAYLOAD_TEMPLATE" \
   <(echo "$MESSAGES") <(echo "$TOOLS"))
 
-echo "--> Sending probe request to Ollama..."
-RESPONSE=$(curl -s "$OLLAMA_URL" -H "Content-Type: application/json" -d "$PAYLOAD")
+echo "--> Sending probe request to Ollama (up to 3 attempts)..."
+CONFIG_FILE="$CONFIG_DIR/${SANITIZED_MODEL}.config.json"
 
-echo "$RESPONSE" > "$RAW_RESPONSE_FILE"
-echo "📊 Saved raw response to: $RAW_RESPONSE_FILE"
+for attempt in 1 2 3; do
+    RESPONSE=$(curl -s "$OLLAMA_URL" -H "Content-Type: application/json" -d "$PAYLOAD")
+    echo "$RESPONSE" > "$RAW_RESPONSE_FILE"
+
+    python3 "$(dirname "$0")/parser.py" --probe < "$RAW_RESPONSE_FILE" > "$CONFIG_FILE"
+
+    STAGE=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE')).get('stage'))")
+    if [ "$STAGE" != "None" ]; then
+        echo "📊 Saved raw response to: $RAW_RESPONSE_FILE"
+        echo "✅ Detected format — stage $STAGE (attempt $attempt)"
+        break
+    fi
+    echo "⚠️  Attempt $attempt: no tool calls detected. Retrying..."
+done
+
+if [ "$STAGE" = "None" ]; then
+    rm -f "$CONFIG_FILE"
+    echo "📊 Saved raw response to: $RAW_RESPONSE_FILE"
+    echo "⚠️  No format detected after 3 attempts — parser will use full cascade"
+fi
 
 cat << 'PARSER_EOF' > "$PARSER_FILE"
 #!/usr/bin/env bash
-
-python3 - << 'PYEOF'
-import sys
-import json
-import re
-
-REGEX_XML_WRITE = bytes.fromhex('3c77726974655f66696c655c732b66696c656e616d653d22285b5e225d2b29225c732b636f6e74656e743d22285b5e225d2b2922').decode('utf-8')
-REGEX_XML_JAVAC = bytes.fromhex('3c6a617661635c732b66696c656e616d653d22285b5e225d2b2922').decode('utf-8')
-REGEX_XML_JAVA = bytes.fromhex('3c6a6176615c732b636c6173735f6e616d653d22285b5e225d2b2922283a3f5c732b617267733d22285b5e225d2b2922293f').decode('utf-8')
-REGEX_JAVA_BLOCKS = bytes.fromhex('606060283a3f6a617661293f5c732a5c6e282e2a3f7075626c69635c732b636c6173735c732b285b412d5a612d7a302d395f5d2b292e2a3f29606060').decode('utf-8')
-REGEX_SH_CMDS = bytes.fromhex('606060283a3f73687c62617368293f5c732a5c6e282e2a3f295c6e606060').decode('utf-8')
-
-try:
-    data = json.load(sys.stdin)
-except Exception:
-    print("[]")
-    sys.exit(0)
-
-tool_calls = []
-
-native = data.get("message", {}).get("tool_calls", [])
-if native:
-    for tc in native:
-        func = tc.get("function", {})
-        tool_calls.append({"name": func.get("name"), "arguments": func.get("arguments")})
-
-if not tool_calls:
-    content = data.get("message", {}).get("content", "") or ""
-    decoder = json.JSONDecoder()
-    pos = 0
-    while pos < len(content):
-        match = content.find("{", pos)
-        if match == -1:
-            break
-        try:
-            obj, end = decoder.raw_decode(content[match:])
-            if isinstance(obj, dict) and "name" in obj:
-                tool_calls.append({"name": obj["name"], "arguments": obj.get("arguments", {})})
-            pos = match + end
-        except Exception:
-            pos = match + 1
-
-if not tool_calls:
-    content = data.get("message", {}).get("content", "") or ""
-    xml_write = re.findall(REGEX_XML_WRITE, content, re.DOTALL)
-    for fn, cnt in xml_write:
-        tool_calls.append({"name": "write_file", "arguments": {"filename": fn, "content": cnt}})
-
-    xml_javac = re.findall(REGEX_XML_JAVAC, content)
-    for fn in xml_javac:
-        tool_calls.append({"name": "javac", "arguments": {"filename": fn}})
-
-    xml_java = re.findall(REGEX_XML_JAVA, content)
-    for cn, args_str in xml_java:
-        try:
-            args = json.loads(args_str.replace('\\"', '"')) if args_str else []
-        except Exception:
-            args = [args_str] if args_str else []
-        tool_calls.append({"name": "java", "arguments": {"class_name": cn, "args": args}})
-
-if not tool_calls:
-    content = data.get("message", {}).get("content", "") or ""
-    java_blocks = re.findall(REGEX_JAVA_BLOCKS, content, re.DOTALL)
-    for code_body, class_name in java_blocks:
-        tool_calls.append({
-            "name": "write_file",
-            "arguments": {"filename": f"{class_name}.java", "content": code_body.strip()}
-        })
-
-if not tool_calls or all(tc["name"] == "write_file" for tc in tool_calls):
-    content = data.get("message", {}).get("content", "") or ""
-    sh_cmds = re.findall(REGEX_SH_CMDS, content, re.DOTALL)
-    for block in sh_cmds:
-        for line in block.splitlines():
-            line = line.strip()
-            if line.startswith("javac "):
-                parts = line.split()
-                if len(parts) > 1:
-                    tool_calls.append({"name": "javac", "arguments": {"filename": parts[1]}})
-            elif line.startswith("java "):
-                parts = line.split()
-                if len(parts) > 1:
-                    cn = parts[1]
-                    args = parts[2:] if len(parts) > 2 else []
-                    tool_calls.append({"name": "java", "arguments": {"class_name": cn, "args": args}})
-
-print(json.dumps(tool_calls))
-PYEOF
+exec python3 "$(dirname "$0")/../parser.py" --model "$(basename "$0" .sh)"
 PARSER_EOF
 
 chmod +x "$PARSER_FILE"

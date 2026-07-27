@@ -9,7 +9,16 @@ OLLAMA_URL="http://localhost:11434/api/chat"
 
 CONFIG_DIR=".configs"
 SANITIZED_MODEL=$(echo "$MODEL" | sed 's/[/:]/_/g')
-PARSER_FILE="$CONFIG_DIR/${SANITIZED_MODEL}.sh"
+PARSER_FILE="parser.py"
+if [ -f "$CONFIG_DIR/${SANITIZED_MODEL}.sh" ]; then
+    PARSER_FILE="$CONFIG_DIR/${SANITIZED_MODEL}.sh"
+elif [ -f "$CONFIG_DIR/${SANITIZED_MODEL}.py" ]; then
+    PARSER_FILE="$CONFIG_DIR/${SANITIZED_MODEL}.py"
+else
+    echo "⚠️  No parser profile found for $MODEL. Running profile_model.sh..."
+    bash ./profile_model.sh "$MODEL"
+    PARSER_FILE="$CONFIG_DIR/${SANITIZED_MODEL}.sh"
+fi
 
 MAX_STEPS=10
 STEP_COUNT=0
@@ -22,7 +31,8 @@ echo "=========================================="
 JSON_PAYLOAD=$(jq -c -n --arg model "$MODEL" '{
   model: $model,
   messages: [{role: "user", content: "hi"}],
-  keep_alive: "5m"
+  keep_alive: "5m",
+  think: false
 }')
 
 curl -s "$OLLAMA_URL" \
@@ -31,11 +41,6 @@ curl -s "$OLLAMA_URL" \
      > /dev/null
 
 echo "✅ Model preloaded successfully."
-
-if [ ! -f "$PARSER_FILE" ]; then
-    echo "⚠️  No parser profile found for $MODEL. Running profile_model.sh..."
-    bash ./profile_model.sh "$MODEL"
-fi
 
 echo "=========================================="
 echo "--> Running evaluation for model: $MODEL"
@@ -114,26 +119,38 @@ TOOLS='[
 
 echo "--> Starting Ollama Agent Loop (Max Steps: $MAX_STEPS)..."
 LAST_RESPONSE=""
+MISSING_COUNT=0
 
 while true; do
     PAYLOAD=$(jq -s --arg model "$MODEL" \
-      '{model: $model, messages: .[0], tools: .[1], stream: false}' \
+      '{model: $model, messages: .[0], tools: .[1], stream: false, temperature: 0, think: false}' \
       <(echo "$MESSAGES") <(echo "$TOOLS"))
 
     RESPONSE=$(curl -s "$OLLAMA_URL" -H "Content-Type: application/json" -d "$PAYLOAD")
     LAST_RESPONSE="$RESPONSE"
 
-    ASSISTANT_MSG=$(echo "$RESPONSE" | jq '.message')
-    MESSAGES=$(jq -s '.[0] + [.[1]]' <(echo "$MESSAGES") <(echo "$ASSISTANT_MSG"))
-
-    TOOL_CALLS_ARRAY=$(bash "$PARSER_FILE" <<< "$RESPONSE")
+    TOOL_CALLS_ARRAY=$(
+        case "$PARSER_FILE" in
+            *.sh) bash "$PARSER_FILE" <<< "$RESPONSE" ;;
+            *)    python3 "$PARSER_FILE" <<< "$RESPONSE" ;;
+        esac
+    )
     NUM_CALLS=$(echo "$TOOL_CALLS_ARRAY" | jq 'length')
 
     if [ "$NUM_CALLS" -eq 0 ]; then
+        if [ "$MISSING_COUNT" -eq 0 ] && [ "$STEP_COUNT" -eq 0 ]; then
+            MISSING_COUNT=1
+            echo "⚠️  No tool calls detected on first turn — retrying once..."
+            continue
+        fi
         echo -e "\n=== Agent Finished Naturally ==="
         echo "$RESPONSE" | jq -r '.message.content'
         break
     fi
+    MISSING_COUNT=0
+
+    ASSISTANT_MSG=$(echo "$RESPONSE" | jq '.message')
+    MESSAGES=$(jq -s '.[0] + [.[1]]' <(echo "$MESSAGES") <(echo "$ASSISTANT_MSG"))
 
     COMBINED_OUTPUT=""
 
@@ -191,7 +208,7 @@ print(code.strip())
 
             "java")
                 CLASS_NAME=$(echo "$TOOL_ARGS" | jq -r '.class_name // empty')
-                RAW_ARGS=$(echo "$TOOL_ARGS" | jq -r '.args // [] | join(" ")' 2>/devnull || true)
+                RAW_ARGS=$(echo "$TOOL_ARGS" | jq -r '.args // [] | join(" ")' 2>/dev/null || true)
                 
                 if [ -z "$CLASS_NAME" ] || [ "$CLASS_NAME" = "null" ]; then
                     OUT="Execution Error: Missing class_name parameter."
@@ -260,8 +277,13 @@ if [ -f "hashprime.java" ]; then
             echo "❌ [TEST FAIL]: N=1000 -> Expected: $EXPECTED_1000 | Got: $ACTUAL_1000"
         fi
 
-        ACTUAL_INVALID=$(java hashprime "" 2>&1 | tr -d '\r\n')
-        echo "ℹ️  [HARNESS TEST]: Empty Input -> Returned: '${ACTUAL_INVALID}'"
+        EXPECTED_EMPTY="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        ACTUAL_EMPTY=$(java hashprime -1 2>&1 | tr -d '\r\n')
+        if [ "$ACTUAL_EMPTY" = "$EXPECTED_EMPTY" ]; then
+            echo "✅ [TEST PASS]: N=-1 -> $ACTUAL_EMPTY"
+        else
+            echo "❌ [TEST FAIL]: N=-1 -> Expected: $EXPECTED_EMPTY | Got: $ACTUAL_EMPTY"
+        fi
     else
         echo "❌ [HARNESS]: Compilation failed."
         echo "$COMPILE_LOG" | sed 's/^/   | /'

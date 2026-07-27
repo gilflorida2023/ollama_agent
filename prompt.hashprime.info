@@ -14,8 +14,9 @@ You are an expert Java developer. Implement a single-file Java CLI program exact
 
 **Input**
 - Single command-line argument: integer N (accessed via args[0])
+- The program must accept both positive and negative integers.
 - Error handling:
-  - If no argument is provided, or the argument is not a valid integer → exit silently with code 0 or 1 (no stack trace, no output to stdout or stderr).
+  - If no argument is provided, or the argument is not a valid integer → exit silently with code 0 or 1 (no stack trace, no output).
 
 **Output**
 - Print ONLY the 64-character lowercase hexadecimal SHA-256 digest.
@@ -25,8 +26,7 @@ You are an expert Java developer. Implement a single-file Java CLI program exact
 - Generate all prime numbers p where 2 ≤ p ≤ N.
 - For each prime, convert it to its base-10 ASCII decimal string (no leading zeros).
 - Append a single newline character '\n' (0x0A) after every prime, including the last one.
-- For N < 2, the stream must be completely empty (0 bytes).
-- Example for N=11: `2\n3\n5\n7\n11\n`
+- For N < 2 (including all negative integers), the stream must be completely empty (0 bytes). Return the SHA-256 digest of the empty byte stream: `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`
 
 **Performance & Memory Constraints (Critical)**
 - Target: N = 100,000,000
@@ -52,7 +52,7 @@ You are an expert Java developer. Implement a single-file Java CLI program exact
 **Instructions for you:**
 1. First, output the complete `hashprime.java` source code.
 2. Then show the exact commands to compile and test it.
-3. Verify the validation tests above.
+3. Verify all validation tests above.
 4. Only after successful tests, confirm completion.
 
 Respond with clean, copy-pasteable code blocks. Do not add extra commentary outside the requested code and commands.
