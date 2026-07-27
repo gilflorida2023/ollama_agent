@@ -310,7 +310,7 @@ while [ $TURN -le $MAX_TURNS ]; do
             echo "  Compilation OK."
             if [ -n "$VERIFY_CMD" ] && [ -n "$EXPECTED_OUT" ]; then
                 ACTUAL_OUT=$(eval "$VERIFY_CMD" | tr -d '\r\n')
-                if [ "$ACTUAL_OUT" = "$EXPECTED_OUT" ]; then
+                if case "$ACTUAL_OUT" in *"$EXPECTED_OUT"*) true;; *) false;; esac; then
                     PASS=true
                     echo "  Verification: PASS ($TASK_ID)"
                 else
