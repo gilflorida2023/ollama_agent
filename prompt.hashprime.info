@@ -1,58 +1,65 @@
-You are an expert Java developer. Implement a single-file Java CLI program exactly as specified below.
 
-**Project:**
-- Name: hashprime
-- File: hashprime.java
-- Language: Java 17+
-- Dependencies: None (standard library only)
+# hashprime Specification
 
-**Requirements:**
+## Project
+- **Name**: hashprime
+- **File**: `hashprime.java`
+- **Language**: Java 17+
+- **Dependencies**: None (standard library only)
 
-**Execution**
-- Command: `java hashprime <N>`
-- Must be a single .java file that compiles and runs with no external jars.
+## Execution
+Command: `java hashprime <N>`
 
-**Input**
-- Single command-line argument: integer N (accessed via args[0])
-- The program must accept both positive and negative integers.
-- Error handling:
-  - If no argument is provided, or the argument is not a valid integer → exit silently with code 0 or 1 (no stack trace, no output).
+Must be a single `.java` file that compiles and runs with no external jars.
 
-**Output**
-- Print ONLY the 64-character lowercase hexadecimal SHA-256 digest.
+## Input
+- Single command-line argument: integer `N` (accessed via `args[0]`)
+- Accepts both positive and negative integers.
+
+## Error Handling
+- If **no argument** is provided, **or** the argument is not a valid integer:
+  - Print the application help message to stdout.
+  - Exit gracefully with code `0`.
+- Help message example:
+
+  Usage: java hashprime <N>
+  Computes the SHA-256 hash of all primes ≤ N (newline-terminated).
+
+## Output
+- Print **ONLY** the 64-character lowercase hexadecimal SHA-256 digest.
 - No extra text, no newlines, no logs, no timestamps.
 
-**Byte Stream to Hash**
-- Generate all prime numbers p where 2 ≤ p ≤ N.
-- For each prime, convert it to its base-10 ASCII decimal string (no leading zeros).
-- Append a single newline character '\n' (0x0A) after every prime, including the last one.
-- For N < 2 (including all negative integers), the stream must be completely empty (0 bytes). Return the SHA-256 digest of the empty byte stream: `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`
+## Byte Stream to Hash
+- Generate all prime numbers `p` where `2 ≤ p ≤ N`.
+- For each prime, convert to its base-10 ASCII decimal string (no leading zeros).
+- Append a single newline character `'\n'` (0x0A) after every prime, **including the last one**.
+- For `N < 2` (including negative numbers), the byte stream must be empty.  
+Expected hash for empty stream:
 
-**Performance & Memory Constraints (Critical)**
-- Target: N = 100,000,000
-- Must run within standard JVM memory (e.g. -Xmx512m or default limits).
-- Do NOT load all primes into a single String or byte[] in memory.
-- Update the MessageDigest incrementally while generating primes.
-- Use memory-efficient prime generation (e.g. segmented sieve or optimized sieve).
+  e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 
-**Validation Tests** (must pass exactly):
+## Performance & Memory Constraints
+- Target: `N = 100,000,000`
+- Must run comfortably within standard JVM memory (`-Xmx512m` or default).
+- Update `MessageDigest` incrementally — **do not** load all primes into one string or byte array.
+- Use memory-efficient prime generation (e.g. `BitSet` + Sieve of Eratosthenes).
 
-| Input   | Expected SHA-256 Output                                      |
-|---------|--------------------------------------------------------------|
-| -5      | e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 |
-| 0       | e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 |
-| 1       | e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 |
-| 11      | 563d8e0603dcc07d784135d99fd81ff6bf98495e898ec1f52e2e7605320cf6dc |
-| 12      | 563d8e0603dcc07d784135d99fd81ff6bf98495e898ec1f52e2e7605320cf6dc |
-| 1000000 | 4883963dd4510a29d6df2ffe4dd11e4e1a910e815c7810b200c77b3357f22a28 |
-| 10000000| 36d6197802bc3b635b43b31cd6a2583f7cf8f5badff7992f3693c5102beefd14 |
+## Validation Tests
+
+| Input       | Expected Output                                              |
+|-------------|--------------------------------------------------------------|
+| `-5`        | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` |
+| `0`         | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` |
+| `1`         | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` |
+| `11`        | `563d8e0603dcc07d784135d99fd81ff6bf98495e898ec1f52e2e7605320cf6dc` |
+| `12`        | `563d8e0603dcc07d784135d99fd81ff6bf98495e898ec1f52e2e7605320cf6dc` |
+| `1000000`   | `4883963dd4510a29d6df2ffe4dd11e4e1a910e815c7810b200c77b3357f22a28` |
+| `10000000`  | `36d6197802bc3b635b43b31cd6a2583f7cf8f5badff7992f3693c5102beefd14` |
 
 ---
 
-**Instructions for you:**
-1. First, output the complete `hashprime.java` source code.
-2. Then show the exact commands to compile and test it.
-3. Verify all validation tests above.
-4. Only after successful tests, confirm completion.
+**Notes**
+- All output must be exactly 64 hexadecimal characters (lowercase).
+- The program must handle the error case by printing help and exiting with code 0 as specified.
 
-Respond with clean, copy-pasteable code blocks. Do not add extra commentary outside the requested code and commands.
+
