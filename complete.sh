@@ -168,7 +168,12 @@ while true; do
 
     TOOL_CALLS_ARRAY=$(
         case "$PARSER_FILE" in
-            *.sh) bash "$PARSER_FILE" <<< "$RESPONSE" ;;
+            *.sh) RESULT=$(bash "$PARSER_FILE" <<< "$RESPONSE")
+                  if [ "$(echo "$RESULT" | python3 -c "import sys,json; calls=json.load(sys.stdin); print(len(calls))" 2>/dev/null || echo 0)" -eq 0 ]; then
+                      python3 parser.py <<< "$RESPONSE"
+                  else
+                      echo "$RESULT"
+                  fi ;;
             *)    python3 "$PARSER_FILE" <<< "$RESPONSE" ;;
         esac
     )
