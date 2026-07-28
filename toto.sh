@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-rm -rf logs/  .configs/
+rm -rf logs/  sandbox/
 # Create logs directory
 if ! [ -d 'logs' ]; then
     echo "Created logs directory"
@@ -53,6 +53,7 @@ echo "=========================================="
 # ←←← Your other code continues here
 # echo "test"
 set +H
+#for i in gemma4:12b gemma4:e4b qwen2.5-coder:14b qwen2.5-coder:7b
 for i in $(ollama list | grep -Ev 'NAME|embed|ocr' | sed -e 's/ .*//'); do
     filename="logs/$(echo "$i" | tr ':/' '_')_$(date +'%a_%b_%d_%H_%M_%S_%Z_%Y').txt"
     echo "Writing ${filename}"
@@ -62,5 +63,6 @@ for i in $(ollama list | grep -Ev 'NAME|embed|ocr' | sed -e 's/ .*//'); do
 
     kill_ollama_models
     sleep 1
-    bash ./complete.sh  "$i" 2>&1 | tee "${filename}"
+    #bash ./complete.sh  "$i" 2>&1 | tee "${filename}"
+    bash ./ralph.sh "$i" 5  2>&1 | tee "${filename}"
 done

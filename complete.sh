@@ -21,8 +21,7 @@ else
 fi
 
 MAX_STEPS=10
-STEP_COUNT=0
-START_TIME=$(date +%s)
+MAX_SESSION_SECONDS=120
 
 echo "=========================================="
 echo "--> Preloading/Warming model into memory: $MODEL..."
@@ -154,9 +153,12 @@ TOOLS=$(jq -n \
     }
   ]')
 
-echo "--> Starting Ollama Agent Loop (Max Steps: $MAX_STEPS)..."
+echo "--> Starting Ollama Agent Loop (Max Steps: $MAX_STEPS, Max Time: ${MAX_SESSION_SECONDS}s)..."
 LAST_RESPONSE=""
 MISSING_COUNT=0
+SUBMIT_CALLED=false
+TIMED_OUT=false
+SESSION_START=$(date +%s)
 
 while true; do
     PAYLOAD=$(jq -s --arg model "$MODEL" \

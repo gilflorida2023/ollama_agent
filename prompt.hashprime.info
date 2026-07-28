@@ -13,11 +13,18 @@ Command: `java hashprime <N>`
 Must be a single `.java` file that compiles and runs with no external jars.
 
 ## Input
-- Single command-line argument: integer `N` (accessed via `args[0]`)
+- Single command-line argument: 
 - Accepts both positive and negative integers.
+- accepts 'kitty' or 'kittycat' or 'kitty kitty'
+   long N;                                                                     
+     try {                                                                       
+         N = Long.parseLong(args[0]);                                            
+     } catch (NumberFormatException e) {                                         
+         N = 0;                                                                  
+     }  
 
 ## Error Handling
-- If **no argument** is provided, **or** the argument is not a valid integer:
+- If **no argument** is provided:
   - Print the application help message to stdout.
   - Exit gracefully with code `0`.
 - Help message example:
@@ -49,6 +56,7 @@ Expected hash for empty stream:
 | Input       | Expected Output                                              |
 |-------------|--------------------------------------------------------------|
 | `-5`        | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` |
+| `kittycat`  | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` |
 | `0`         | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` |
 | `1`         | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` |
 | `11`        | `563d8e0603dcc07d784135d99fd81ff6bf98495e898ec1f52e2e7605320cf6dc` |
@@ -61,5 +69,6 @@ Expected hash for empty stream:
 **Notes**
 - All output must be exactly 64 hexadecimal characters (lowercase).
 - The program must handle the error case by printing help and exiting with code 0 as specified.
+- When coverting a String into an Integer, the value 0 is returned which results in `kitty`  =>  `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` |
 
 

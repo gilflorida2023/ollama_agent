@@ -257,11 +257,47 @@ while [ $TURN -le $MAX_TURNS ]; do
 
     REMAINING=$(jq '[.tasks[] | select(.status == "failing")] | length' "$TASKS_FILE")
     if [ "$REMAINING" -eq 0 ]; then
-        echo "=========================================="
-        echo "All tasks passing! Ralph loop finished successfully."
-        echo "=========================================="
-        git checkout main 2>/dev/null || true
-        exit 0
+        echo ""
+        echo "  --- Regression check: re-verifying all passing tasks ---"
+        REGRESSIONS=0
+        while IFS= read -r task; do
+            tid=$(echo "$task" | jq -r '.id')
+            vcmd=$(echo "$task" | jq -r '.verification_command // ""')
+            eout=$(echo "$task" | jq -r '.expected_output // ""')
+            if [ -n "$vcmd" ] && [ -n "$eout" ]; then
+                actual=$(eval "$vcmd" | tr -d '\r\n')
+                if case "$actual" in *"$eout"*) true;; *) false;; esac; then
+                    echo "    $tid - OK"
+                else
+                    echo "    $tid - FAIL (regression)"
+                    jq "(.tasks[] | select(.id == \"$tid\")).status = \"failing\"" "$TASKS_FILE" > "$TASKS_FILE.tmp" && mv "$TASKS_FILE.tmp" "$TASKS_FILE"
+                    REGRESSIONS=$((REGRESSIONS + 1))
+                fi
+            elif [ -n "$vcmd" ] && [ -z "$eout" ]; then
+                if eval "$vcmd" 2>/dev/null; then
+                    echo "    $tid - OK"
+                else
+                    echo "    $tid - FAIL (regression)"
+                    jq "(.tasks[] | select(.id == \"$tid\")).status = \"failing\"" "$TASKS_FILE" > "$TASKS_FILE.tmp" && mv "$TASKS_FILE.tmp" "$TASKS_FILE"
+                    REGRESSIONS=$((REGRESSIONS + 1))
+                fi
+            else
+                echo "    $tid - OK (no verification)"
+            fi
+        done < <(jq -c '.tasks[] | select(.status == "passing")' "$TASKS_FILE")
+
+        REMAINING=$(jq '[.tasks[] | select(.status == "failing")] | length' "$TASKS_FILE")
+        if [ "$REMAINING" -gt 0 ]; then
+            echo "  $REGRESSIONS regression(s) detected. Continuing loop..."
+            echo ""
+        else
+            echo "  All passing tasks still pass."
+            echo "=========================================="
+            echo "All tasks passing! Ralph loop finished successfully."
+            echo "=========================================="
+            git checkout main 2>/dev/null || true
+            exit 0
+        fi
     fi
 
     NEXT_TASK=$(jq -r '[.tasks[] | select(.status == "failing")] | sort_by(.priority) | .[0]' "$TASKS_FILE")
