@@ -255,6 +255,44 @@ while [ $TURN -le $MAX_TURNS ]; do
     echo "Turn $TURN of $MAX_TURNS (branch: $BRANCH_NAME) @ $TS_HUMAN"
     echo "--------------------------------------------------"
 
+    # Check progress tracker before starting this turn
+    if [ -f "sandbox/progress_tracker.json" ]; then
+        python3 << PYEOF
+import json
+all_spec_tasks = ["input_validation", "empty_stream", "n_11", "n_1000000", "n_10000000", "n_1000000000"]
+
+try:
+    with open('sandbox/progress_tracker.json') as f:
+        progress = json.load(f)
+    
+    completed_tasks = set(progress.get('completed_tasks', []))
+    completed_with_success = set(progress.get('completed_with_success', []))
+    
+    # Check if all expected tasks completed
+    all_tasks_completed = all(task in completed_tasks for task in all_spec_tasks)
+    all_tasks_succeeded = all(task in completed_with_success for task in all_spec_tasks)
+    
+    if all_tasks_completed:
+        if all_tasks_succeeded:
+            print('SUCCESS_ALL_TASKS')
+        else:
+            print('SOME_TASKS_FAILED')
+    else:
+        print('NONE_COMPLETED_YET')
+except FileNotFoundError:
+    print('NO_PROGRESS_FILE')
+PYEOF
+    if grep -q "SUCCESS_ALL_TASKS"; then
+        echo ""
+        echo "  --- All expected tasks completed successfully ---"
+        echo "  RALPH will exit early as all tasks are done."
+        echo "=========================================="
+        echo "RALPH loop finished successfully — all tasks complete."
+        echo "=========================================="
+        git checkout main 2>/dev/null || true
+        exit 0
+    fi
+
     REMAINING=$(jq '[.tasks[] | select(.status == "failing")] | length' "$TASKS_FILE")
     if [ "$REMAINING" -eq 0 ]; then
         echo ""
