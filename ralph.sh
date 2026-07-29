@@ -22,13 +22,9 @@ echo "Starting Ralph Loop for: $MODEL"
 echo "Branch: $BRANCH_NAME"
 echo "=========================================="
 
-# ---------------------------------------------------------------------------
-# Phase 0: Sandbox directory setup
-# ---------------------------------------------------------------------------
-
 mkdir -p "$SANDBOX_DIR"
 
-for f in complete.sh parser.py profile_model.sh progress_tracker.py; do
+for f in complete.sh parser.py profile_model.sh progress_tracker.py spec_parser.py task_runner.py; do
     if [ ! -L "$SANDBOX_DIR/$f" ] && [ ! -f "$SANDBOX_DIR/$f" ]; then
         ln -s "../$f" "$SANDBOX_DIR/$f"
     fi
@@ -44,18 +40,12 @@ fi
 
 cd "$SANDBOX_DIR"
 
-# ---------------------------------------------------------------------------
-# Phase 0.5: Model profiling
-# ---------------------------------------------------------------------------
 PARSER_FILE="$CONFIG_DIR/${SANITIZED_MODEL}.sh"
 if [ ! -f "$PARSER_FILE" ]; then
     echo "Model parser config not found. Running profile_model.sh..."
     ../profile_model.sh "$MODEL"
 fi
 
-# ---------------------------------------------------------------------------
-# Phase 1: Git + task ledger initialization (one-time)
-# ---------------------------------------------------------------------------
 if [ ! -d ".git" ]; then
     echo "Initializing sandbox git repository..."
     git init -q
@@ -66,8 +56,8 @@ if [ ! -d ".git" ]; then
         git branch -m "$CUR_BRANCH" main 2>/dev/null || true
     fi
 
-    # Copy the spec into the sandbox (not symlinked — we modify it per-turn)
     cp "../$SPEC_FILE" "$SPEC_FILE"
+    cp "../spec.yaml" "spec.yaml"
 
     cat > "$GITIGNORE_FILE" << 'GITEOF'
 *.tmp
@@ -86,91 +76,8 @@ EXPECTED_1M="4883963dd4510a29d6df2ffe4dd11e4e1a910e815c7810b200c77b3357f22a28"
 INITEOF
     chmod +x "$INIT_FILE"
 
-    # ------------------------------------------------------------------
-    # Generate tasks.json by parsing the spec
-    # ------------------------------------------------------------------
-    echo "Generating tasks.json from $SPEC_FILE..."
-    python3 << 'PYEOF' || { echo "FAILED to generate tasks.json"; exit 1; }
-import sys, json, re
-
-spec_file = "prompt.hashprime.info"
-with open(spec_file) as f:
-    spec = f.read()
-
-tasks = []
-
-# ------ 1. Error handling / help text task ------
-has_help = re.search(r'(?i)Usage\s*:', spec)
-has_error_handling = re.search(r'(?i)no argument|invalid|error.*handling|help message', spec)
-if has_help or has_error_handling:
-    # Extract the usage line if present
-    help_text = "Usage: java hashprime <N>"
-    for line in spec.split('\n'):
-        if 'Usage:' in line:
-            candidate = line.strip().strip('`').strip()
-            if candidate:
-                help_text = candidate
-            break
-    tasks.append({
-        "id": "input_validation",
-        "description": "Handle no argument or invalid integer — print help message to stdout and exit 0",
-        "status": "failing",
-        "priority": 1,
-        "verification_command": "java hashprime 2>&1",
-        "expected_output": "Usage:"
-    })
-
-# ------ 2. Parse the validation table ------
-EMPTY_HASH = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-seen_hashes = set()
-priority = 2
-
-table_pattern = re.compile(r'\|\s*`\s*(-?\d+)\s*`\s*\|\s*`\s*([a-f0-9]+)\s*`\s*\|')
-for match in table_pattern.finditer(spec):
-    n_str, h = match.groups()
-    # Deduplicate by hash (multiple N map to same hash)
-    if h in seen_hashes:
-        continue
-    seen_hashes.add(h)
-
-    # Single task for all empty-stream cases (N < 2)
-    if h == EMPTY_HASH:
-        tid = "empty_stream"
-        desc = f"N<2 (negative, 0, 1) produces empty-stream hash {EMPTY_HASH[:16]}..."
-        vcmd = "java hashprime -5 2>&1"
-        eout = EMPTY_HASH
-    else:
-        tid = f"n_{n_str}"
-        desc = f"N={n_str} produces {h[:16]}..."
-        vcmd = f"java hashprime {n_str} 2>&1"
-        eout = h
-
-    tasks.append({
-        "id": tid,
-        "description": desc,
-        "status": "failing",
-        "priority": priority,
-        "verification_command": vcmd,
-        "expected_output": eout
-    })
-    priority += 1
-
-# ------ 3. Memory / performance constraint ------
-if re.search(r'(?i)(?:100[,_]?000[,_]?000|1\s*0{8}|performance|constraint|512m)', spec):
-    tasks.append({
-        "id": "memory_efficient",
-        "description": "Handle N=100M within -Xmx512m: incremental MessageDigest, BitSet sieve, no string concatenation",
-        "status": "failing",
-        "priority": 99,
-        "verification_command": "java -Xmx512m hashprime 100000000 2>&1 >/dev/null",
-        "expected_output": ""
-    })
-
-with open("tasks.json", "w") as f:
-    json.dump({"tasks": tasks}, f, indent=2)
-
-print(f"Generated {len(tasks)} tasks from spec.")
-PYEOF
+    echo "Generating tasks.json from spec.yaml..."
+    python3 ../spec_parser.py "spec.yaml"
 
     cat > "$CHANGELOG_FILE" << 'CHANGEOF'
 # Changelog
@@ -188,10 +95,6 @@ CHANGEOF
     echo "Sandbox initialized on branch 'main'."
 fi
 
-# ---------------------------------------------------------------------------
-# Phase 2: Switch to model branch
-# ---------------------------------------------------------------------------
-
 source "$INIT_FILE" 2>/dev/null || true
 
 if git rev-parse --verify "$BRANCH_NAME" >/dev/null 2>&1; then
@@ -202,18 +105,15 @@ else
     echo "Created new branch: $BRANCH_NAME (from main)"
 fi
 
-# ---------------------------------------------------------------------------
-# Helper: generate task-focused prompt for the LLM
-# ---------------------------------------------------------------------------
 generate_task_prompt() {
-    local task_id="$1" task_desc="$2" verify_cmd="$3" expected_out="$4" passing_tasks="$5"
+    local task_id="$1" task_desc="$2" verify_cmd="$3" expected_out="$4" passing_tasks="$5" regression_inputs="$6" filename="$7"
     local tmpl="prompts/task_context.txt"
 
-    # Substitute template placeholders safely via python3
     local header
     header=$(TASK_ID="$task_id" TASK_DESC="$task_desc" \
              PASSING_TASKS="$passing_tasks" VERIFY_CMD="$verify_cmd" \
-             EXPECTED_OUT="$expected_out" TMPL_FILE="$tmpl" \
+             EXPECTED_OUT="$expected_out" REGRESSION_INPUTS="$regression_inputs" \
+             FILENAME="$filename" TMPL_FILE="$tmpl" \
              python3 << 'PYEOF'
 import os, sys
 with open(os.environ['TMPL_FILE']) as f:
@@ -227,6 +127,17 @@ if exp:
     t = t.replace('{{EXPECTED_OUTPUT_BLOCK}}', 'Expected output:\n  ' + exp)
 else:
     t = t.replace('{{EXPECTED_OUTPUT_BLOCK}}\n', '')
+ri = os.environ.get('REGRESSION_INPUTS', '')
+if ri:
+    items = [f'  - N={x}' for x in ri.split(', ')]
+    t = t.replace('{{REGRESSION_INPUTS}}', '\n'.join(items))
+else:
+    t = t.replace('{{REGRESSION_INPUTS}}\n', '')
+fn = os.environ.get('FILENAME', '')
+if fn:
+    t = t.replace('{{FILENAME}}', fn)
+else:
+    t = t.replace('{{FILENAME}}\n', '')
 sys.stdout.write(t)
 PYEOF
 )
@@ -242,9 +153,6 @@ PYEOF
     } > "$SPEC_FILE"
 }
 
-# ---------------------------------------------------------------------------
-# Phase 3: Iterative worker loop
-# ---------------------------------------------------------------------------
 TURN=1
 
 while [ $TURN -le $MAX_TURNS ]; do
@@ -255,33 +163,7 @@ while [ $TURN -le $MAX_TURNS ]; do
     echo "Turn $TURN of $MAX_TURNS (branch: $BRANCH_NAME) @ $TS_HUMAN"
     echo "--------------------------------------------------"
 
-    if [ -f "sandbox/progress_tracker.json" ]; then
-        python3 << PYEOF | grep -q "SUCCESS_ALL_TASKS"
-import json
-all_spec_tasks = ["input_validation", "empty_stream", "n_11", "n_1000000", "n_10000000", "memory_efficient"]
-
-try:
-    with open('progress_tracker.json') as f:
-        progress = json.load(f)
-    
-    completed_tasks = set(progress.get('completed_tasks', []))
-    completed_with_success = set(progress.get('completed_with_success', []))
-    
-    # Check if all expected tasks completed
-    all_tasks_completed = all(task in completed_tasks for task in all_spec_tasks)
-    all_tasks_succeeded = all(task in completed_with_success for task in all_spec_tasks)
-    
-    if all_tasks_completed:
-        if all_tasks_succeeded:
-            print('SUCCESS_ALL_TASKS')
-        else:
-            print('SOME_TASKS_FAILED')
-    else:
-        print('NONE_COMPLETED_YET')
-except FileNotFoundError:
-    print('NO_PROGRESS_FILE')
-PYEOF
-    if [ $? -eq 0 ]; then
+    if python3 -c "import task_runner; exit(0) if task_runner.check_all_completed() else exit(1)" 2>/dev/null; then
         echo ""
         echo "  --- All expected tasks completed successfully ---"
         echo "  RALPH will exit early as all tasks are done."
@@ -290,7 +172,6 @@ PYEOF
         echo "=========================================="
         git checkout main 2>/dev/null || true
         exit 0
-    fi
     fi
 
     REMAINING=$(jq '[.tasks[] | select(.status == "failing")] | length' "$TASKS_FILE")
@@ -347,6 +228,16 @@ PYEOF
     PASSING_TASKS=$(jq -r '[.tasks[] | select(.status == "passing") | .id] | join(", ")' "$TASKS_FILE")
     [ -z "$PASSING_TASKS" ] && PASSING_TASKS="(none)"
 
+    REGRESSION_INPUTS=$(python3 -c "
+import json
+with open('$TASKS_FILE') as f:
+    data = json.load(f)
+rt = data.get('regression_tests', [])
+print(', '.join(t['input'] for t in rt))
+" 2>/dev/null || echo "")
+
+    PROJECT_FILE=$(jq -r '.filename // "hashprime.java"' "$TASKS_FILE" 2>/dev/null || echo "hashprime.java")
+
     echo "Task: $TASK_ID"
     echo "  $TASK_DESC"
 
@@ -358,10 +249,7 @@ PYEOF
         echo "Passing: $PASSING_TASKS"
     } >> "$PROGRESS_FILE"
 
-    # ---------------------------------------------------------------
-    # Inject task context into the prompt for the LLM
-    # ---------------------------------------------------------------
-    generate_task_prompt "$TASK_ID" "$TASK_DESC" "$VERIFY_CMD" "$EXPECTED_OUT" "$PASSING_TASKS"
+    generate_task_prompt "$TASK_ID" "$TASK_DESC" "$VERIFY_CMD" "$EXPECTED_OUT" "$PASSING_TASKS" "$REGRESSION_INPUTS" "$PROJECT_FILE"
 
     echo ""
     echo "--- Starting fresh worker session (up to 10 tool steps per session) ---"
@@ -374,80 +262,24 @@ PYEOF
 
     echo "Exit Status: $RUN_EXIT" >> "$PROGRESS_FILE"
 
-    # -----------------------------------------------------------------------
-    # Verify: compile + run verification_command
-    # -----------------------------------------------------------------------
-    PASS=false
-    if [ -f "hashprime.java" ]; then
-        echo "  Compiling hashprime.java..."
-        if javac hashprime.java 2>/dev/null; then
-            echo "  Compilation OK."
-            if [ -n "$VERIFY_CMD" ] && [ -n "$EXPECTED_OUT" ]; then
-                ACTUAL_OUT=$(eval "$VERIFY_CMD" | tr -d '\r\n')
-                if case "$ACTUAL_OUT" in *"$EXPECTED_OUT"*) true;; *) false;; esac; then
-                    PASS=true
-                    echo "  Verification: PASS ($TASK_ID)"
-                else
-                    echo "  Verification: FAIL ($TASK_ID)"
-                    echo "  Expected: $EXPECTED_OUT"
-                    echo "  Got:      $ACTUAL_OUT"
-                fi
-            elif [ -n "$VERIFY_CMD" ] && [ -z "$EXPECTED_OUT" ]; then
-                if eval "$VERIFY_CMD" 2>/dev/null; then
-                    PASS=true
-                    echo "  Verification: PASS ($TASK_ID — run only)"
-                else
-                    echo "  Verification: FAIL ($TASK_ID — run failed)"
-                fi
-            else
-                PASS=true
-                echo "  Verification: PASS ($TASK_ID — existence only)"
-            fi
-
-            if [ -f "progress_tracker.py" ]; then
-                python3 progress_tracker.py add_completed "$TASK_ID" "$PASS" 2>/dev/null || true
-            fi
-        else
-            echo "  Compilation FAILED after complete.sh run"
-        fi
-    else
-        echo "  hashprime.java not found on disk"
+    # Capture model reasoning before task_runner (which may git reset --hard)
+    RALPH_REASONING=""
+    if [ -f ".last_reasoning.txt" ]; then
+        RALPH_REASONING=$(head -c 500 < .last_reasoning.txt || true)
+        rm -f .last_reasoning.txt
     fi
+    export RALPH_REASONING
 
-    # -----------------------------------------------------------------------
-    # Commit or rollback
-    # -----------------------------------------------------------------------
-    if [ "$PASS" = true ]; then
-        echo "  -> Task $TASK_ID PASSED"
-
-        jq "(.tasks[] | select(.id == \"$TASK_ID\")).status = \"passing\"" "$TASKS_FILE" > "$TASKS_FILE.tmp" && mv "$TASKS_FILE.tmp" "$TASKS_FILE"
-
-        {
-            echo ""
-            echo "## Turn $TURN ($TS_HUMAN)"
-            echo "- **$TASK_ID**: passed"
-        } >> "$CHANGELOG_FILE"
-
-        echo "Result: PASS" >> "$PROGRESS_FILE"
-
-        git add -A
-        if ! git diff --staged --quiet; then
-            git commit -m "ralph: turn $TURN - $TASK_ID passing" -q
-            echo "  Committed to $BRANCH_NAME"
-        else
-            echo "  Nothing new to commit."
-        fi
-    else
-        echo "  -> Task $TASK_ID FAILED — rolling back"
-        echo "Result: FAIL (rolled back)" >> "$PROGRESS_FILE"
-        git reset --hard HEAD
-        rm -f *.java *.class 2>/dev/null || true
-        echo "  Rolled back to last good commit on $BRANCH_NAME"
-    fi
+    echo "$NEXT_TASK" | python3 ../task_runner.py verify "$TURN" "$TS_HUMAN" "$BRANCH_NAME"
+    PASS_RESULT=$?
 
     TURN_END=$(date +%s)
     TURN_DURATION=$((TURN_END - TURN_START))
-    echo "  Turn $TURN duration: ${TURN_DURATION}s | Result: $([ "$PASS" = true ] && echo 'PASS' || echo 'FAIL (rolled back)') | Task: $TASK_ID"
+    if [ "$PASS_RESULT" -eq 0 ]; then
+        echo "  Turn $TURN duration: ${TURN_DURATION}s | Result: PASS | Task: $TASK_ID"
+    else
+        echo "  Turn $TURN duration: ${TURN_DURATION}s | Result: FAIL (rolled back) | Task: $TASK_ID"
+    fi
 
     TURN=$((TURN + 1))
 done

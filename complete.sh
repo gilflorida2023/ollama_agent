@@ -269,10 +269,11 @@ print(json.dumps({"role": "tool", "content": content}))
                 CONTENT=$(echo "$TOOL_ARGS" | jq -r '.content // empty')
 
                 if [ -z "$FILENAME" ] || [ "$FILENAME" = "null" ]; then
-                    OUT="Tool Exec Error: Missing or invalid filename. You must provide a valid filename parameter (e.g. 'hashprime.java')."
-                    echo "   [ERROR]: Model attempted to write file with null/empty filename. Request rejected."
-                else
-                    FORMATTED_CONTENT=$(python3 -c '
+                    FILENAME="$EXPECTED_FILENAME"
+                    echo "   [AUTO-FIX]: Filename was null/empty. Auto-injecting '$EXPECTED_FILENAME' from spec."
+                fi
+
+                FORMATTED_CONTENT=$(python3 -c '
 import sys
 code = sys.stdin.read()
 if "\\n" in code and "\n" not in code:
@@ -280,31 +281,30 @@ if "\\n" in code and "\n" not in code:
 print(code.strip())
 ' <<< "$CONTENT")
 
-                    echo "   [EXEC]: Writing file '$FILENAME'..."
-                    printf "%s\n" "$FORMATTED_CONTENT" > "$FILENAME"
+                echo "   [EXEC]: Writing file '$FILENAME'..."
+                printf "%s\n" "$FORMATTED_CONTENT" > "$FILENAME"
 
-                    echo "   --- [FILE CONTENT PREVIEW] ---"
-                    echo "$FORMATTED_CONTENT" | sed 's/^/   | /'
-                    echo "   ------------------------------"
+                echo "   --- [FILE CONTENT PREVIEW] ---"
+                echo "$FORMATTED_CONTENT" | sed 's/^/   | /'
+                echo "   ------------------------------"
 
-                    OUT="File '$FILENAME' written successfully."
-                fi
+                OUT="File '$FILENAME' written successfully."
                 ;;
 
             "javac")
                 FILENAME=$(echo "$TOOL_ARGS" | jq -r '.filename // empty')
                 if [ -z "$FILENAME" ] || [ "$FILENAME" = "null" ]; then
-                    OUT="Compilation Error: Missing filename parameter."
-                    echo "   [ERROR]: Missing filename for javac."
+                    FILENAME="$EXPECTED_FILENAME"
+                    echo "   [AUTO-FIX]: Filename was null/empty. Auto-injecting '$EXPECTED_FILENAME' from spec."
+                fi
+
+                echo "   [EXEC]: javac $FILENAME"
+                if COMPILE_ERR=$(timeout "$STEP_TIMEOUT" javac "$FILENAME" 2>&1); then
+                    OUT="Compilation successful. You can now execute the compiled class using 'java'."
+                    echo "   [SUCCESS]: Compiled cleanly."
                 else
-                    echo "   [EXEC]: javac $FILENAME"
-                    if COMPILE_ERR=$(timeout "$STEP_TIMEOUT" javac "$FILENAME" 2>&1); then
-                        OUT="Compilation successful. You can now execute the compiled class using 'java'."
-                        echo "   [SUCCESS]: Compiled cleanly."
-                    else
-                        OUT="Compilation failed with error:\n$COMPILE_ERR\nPlease fix the source code using 'write_file' and re-compile."
-                        echo "   [ERROR]: Compilation failed."
-                    fi
+                    OUT="Compilation failed with error:\n$COMPILE_ERR\nPlease fix the source code using 'write_file' and re-compile."
+                    echo "   [ERROR]: Compilation failed."
                 fi
                 ;;
 
@@ -313,19 +313,19 @@ print(code.strip())
                 RAW_ARGS=$(echo "$TOOL_ARGS" | jq -r '.args // [] | join(" ")' 2>/dev/null || true)
                 
                 if [ -z "$CLASS_NAME" ] || [ "$CLASS_NAME" = "null" ]; then
-                    OUT="Execution Error: Missing class_name parameter."
-                    echo "   [ERROR]: Missing class_name for java tool."
-                else
-                    echo "   [EXEC]: java $CLASS_NAME $RAW_ARGS"
-                    RUN_OUT=$(timeout "$STEP_TIMEOUT" java $CLASS_NAME $RAW_ARGS 2>&1 || true)
-
-                    if echo "$RUN_OUT" | grep -q "ClassNotFoundException"; then
-                        OUT="Program Execution Failed:\n$RUN_OUT\nHINT: Class '$CLASS_NAME.class' was not found. Ensure you call 'write_file' to save the Java source code and 'javac' to compile it before calling 'java'."
-                    else
-                        OUT="Program Output:\n$RUN_OUT"
-                    fi
-                    echo "   [PROGRAM OUTPUT]: $RUN_OUT"
+                    CLASS_NAME="$CLASS_TOKEN"
+                    echo "   [AUTO-FIX]: class_name was null/empty. Auto-injecting '$CLASS_TOKEN' from spec."
                 fi
+
+                echo "   [EXEC]: java $CLASS_NAME $RAW_ARGS"
+                RUN_OUT=$(timeout "$STEP_TIMEOUT" java $CLASS_NAME $RAW_ARGS 2>&1 || true)
+
+                if echo "$RUN_OUT" | grep -q "ClassNotFoundException"; then
+                    OUT="Program Execution Failed:\n$RUN_OUT\nHINT: Class '$CLASS_NAME.class' was not found. Ensure you call 'write_file' to save the Java source code and 'javac' to compile it before calling 'java'."
+                else
+                    OUT="Program Output:\n$RUN_OUT"
+                fi
+                echo "   [PROGRAM OUTPUT]: $RUN_OUT"
                 ;;
 
             *)
@@ -353,9 +353,15 @@ print(json.dumps({"role": "tool", "content": content}))
     fi
 done
 
+# Capture model reasoning from last response
+REASONING=$(echo "$LAST_RESPONSE" | jq -r '.message.content // ""' 2>/dev/null | head -c 500)
+echo "$REASONING" > .last_reasoning.txt
+
 echo "=========================================="
-echo "          AUTOMATED HARNESS VALIDATION    "
+echo "    AUTOMATED HARNESS VALIDATION — $MODEL"
 echo "=========================================="
+
+HARNESS_EXIT=0
 
 if [ -f "hashprime.java" ]; then
     echo "🔍 Found hashprime.java on disk. Starting automated test harness..."
@@ -363,45 +369,48 @@ if [ -f "hashprime.java" ]; then
     if COMPILE_LOG=$(javac hashprime.java 2>&1); then
         echo "✅ [HARNESS]: Compilation succeeded."
 
-        EXPECTED_11="563d8e0603dcc07d784135d99fd81ff6bf98495e898ec1f52e2e7605320cf6dc"
-        ACTUAL_11=$(java hashprime 11 2>&1 | tr -d '\r\n')
-        if [ "$ACTUAL_11" = "$EXPECTED_11" ]; then
-            echo "✅ [TEST PASS]: N=11 -> $ACTUAL_11"
-        else
-            echo "❌ [TEST FAIL]: N=11 -> Expected: $EXPECTED_11 | Got: $ACTUAL_11"
-        fi
-
-        EXPECTED_1000="55542ac8f84d3c795ac05ea7dc3e382353c4bdd519d97e178d3f17a7f97fb25f"
-        ACTUAL_1000=$(java hashprime 1000 2>&1 | tr -d '\r\n')
-        if [ "$ACTUAL_1000" = "$EXPECTED_1000" ]; then
-            echo "✅ [TEST PASS]: N=1000 -> $ACTUAL_1000"
-        else
-            echo "❌ [TEST FAIL]: N=1000 -> Expected: $EXPECTED_1000 | Got: $ACTUAL_1000"
-        fi
-
-        EXPECTED_EMPTY="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        ACTUAL_EMPTY=$(java hashprime -1 2>&1 | tr -d '\r\n')
-        if [ "$ACTUAL_EMPTY" = "$EXPECTED_EMPTY" ]; then
-            echo "✅ [TEST PASS]: N=-1 -> $ACTUAL_EMPTY"
-        else
-            echo "❌ [TEST FAIL]: N=-1 -> Expected: $EXPECTED_EMPTY | Got: $ACTUAL_EMPTY"
-        fi
+        python3 << 'PYEOF' 2>&1 || HARNESS_EXIT=$?
+import json, subprocess, sys
+with open("tasks.json") as f:
+    data = json.load(f)
+tests = data.get("regression_tests", [])
+if not tests:
+    print("⚠️  No regression tests defined in tasks.json (regression_tests empty).")
+    sys.exit(0)
+passed = 0
+failed = 0
+for t in tests:
+    inp = t["input"]
+    expected = t["expected"]
+    try:
+        actual = subprocess.check_output(
+            ["java", "hashprime", inp],
+            stderr=subprocess.STDOUT,
+            timeout=60
+        ).decode().replace("\r", "").replace("\n", "").strip()
+    except subprocess.TimeExpired:
+        actual = "TIMEOUT"
+    except subprocess.CalledProcessError as e:
+        actual = f"EXIT_CODE_{e.returncode}"
+    except Exception as e:
+        actual = f"ERROR: {e}"
+    if actual == expected:
+        print(f"✅ [TEST PASS]: N={inp} -> {actual}")
+        passed += 1
+    else:
+        print(f"❌ [TEST FAIL]: N={inp} -> Expected: {expected} | Got: {actual}")
+        failed += 1
+print(f"  Harness: {passed} passed, {failed} failed")
+sys.exit(1 if failed > 0 else 0)
+PYEOF
     else
         echo "❌ [HARNESS]: Compilation failed."
         echo "$COMPILE_LOG" | sed 's/^/   | /'
+        HARNESS_EXIT=1
     fi
 else
     echo "❌ [HARNESS]: hashprime.java was not found on disk. Skipping validation."
-fi
-
-# Update progress tracker with harness test results
-if [ -f "$PROGRESS_FILE" ]; then
-    if [ "$ACTUAL_11" = "$EXPECTED_11" ]; then
-        python3 "$PROGRESS_FILE" add_completed n_11 true 2>/dev/null || true
-    fi
-    if [ "$ACTUAL_EMPTY" = "$EXPECTED_EMPTY" ]; then
-        python3 "$PROGRESS_FILE" add_completed empty_stream true 2>/dev/null || true
-    fi
+    HARNESS_EXIT=1
 fi
 
 END_TIME=$(date +%s)

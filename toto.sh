@@ -25,5 +25,5 @@ for i in $(ollama list | grep -Ev 'NAME|embed|ocr' | sed -e 's/ .*//'); do
     cleanup_children
     sleep 1
 
-    bash ./ralph.sh "$i" 15 2>&1 | tee "${filename}" | tee -a "logs/toto.log"
+    bash ./ralph.sh "$i" 30 2>&1 | tee "${filename}" | tee -a "logs/toto.log"
 done
