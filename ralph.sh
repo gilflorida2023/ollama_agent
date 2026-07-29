@@ -28,7 +28,7 @@ echo "=========================================="
 
 mkdir -p "$SANDBOX_DIR"
 
-for f in complete.sh parser.py profile_model.sh; do
+for f in complete.sh parser.py profile_model.sh progress_tracker.py; do
     if [ ! -L "$SANDBOX_DIR/$f" ] && [ ! -f "$SANDBOX_DIR/$f" ]; then
         ln -s "../$f" "$SANDBOX_DIR/$f"
     fi
@@ -255,14 +255,13 @@ while [ $TURN -le $MAX_TURNS ]; do
     echo "Turn $TURN of $MAX_TURNS (branch: $BRANCH_NAME) @ $TS_HUMAN"
     echo "--------------------------------------------------"
 
-    # Check progress tracker before starting this turn
     if [ -f "sandbox/progress_tracker.json" ]; then
-        python3 << PYEOF
+        python3 << PYEOF | grep -q "SUCCESS_ALL_TASKS"
 import json
-all_spec_tasks = ["input_validation", "empty_stream", "n_11", "n_1000000", "n_10000000", "n_1000000000"]
+all_spec_tasks = ["input_validation", "empty_stream", "n_11", "n_1000000", "n_10000000", "memory_efficient"]
 
 try:
-    with open('sandbox/progress_tracker.json') as f:
+    with open('progress_tracker.json') as f:
         progress = json.load(f)
     
     completed_tasks = set(progress.get('completed_tasks', []))
@@ -282,7 +281,7 @@ try:
 except FileNotFoundError:
     print('NO_PROGRESS_FILE')
 PYEOF
-    if grep -q "SUCCESS_ALL_TASKS"; then
+    if [ $? -eq 0 ]; then
         echo ""
         echo "  --- All expected tasks completed successfully ---"
         echo "  RALPH will exit early as all tasks are done."
@@ -291,6 +290,7 @@ PYEOF
         echo "=========================================="
         git checkout main 2>/dev/null || true
         exit 0
+    fi
     fi
 
     REMAINING=$(jq '[.tasks[] | select(.status == "failing")] | length' "$TASKS_FILE")
@@ -402,6 +402,10 @@ PYEOF
             else
                 PASS=true
                 echo "  Verification: PASS ($TASK_ID — existence only)"
+            fi
+
+            if [ -f "progress_tracker.py" ]; then
+                python3 progress_tracker.py add_completed "$TASK_ID" "$PASS" 2>/dev/null || true
             fi
         else
             echo "  Compilation FAILED after complete.sh run"
