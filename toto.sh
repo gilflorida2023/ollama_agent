@@ -64,5 +64,5 @@ for i in $(ollama list | grep -Ev 'NAME|embed|ocr' | sed -e 's/ .*//'); do
     kill_ollama_models
     sleep 1
     #bash ./complete.sh  "$i" 2>&1 | tee "${filename}"
-    bash ./ralph.sh "$i" 15  2>&1 | tee "${filename}"
+    bash ./ralph.sh "$i" 15  2>&1 | tee "${filename}" | tee -a "logs/toto.log"
 done

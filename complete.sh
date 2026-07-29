@@ -21,7 +21,7 @@ else
 fi
 
 MAX_STEPS=10
-MAX_SESSION_SECONDS=120
+STEP_TIMEOUT=120
 
 PROGRESS_FILE="sandbox/progress_tracker.py"
 
@@ -155,19 +155,19 @@ TOOLS=$(jq -n \
     }
   ]')
 
-echo "--> Starting Ollama Agent Loop (Max Steps: $MAX_STEPS, Max Time: ${MAX_SESSION_SECONDS}s)..."
+echo "--> Starting Ollama Agent Loop (Max Steps: $MAX_STEPS, Max Time per Step: ${STEP_TIMEOUT}s)..."
 LAST_RESPONSE=""
 MISSING_COUNT=0
-SUBMIT_CALLED=false
-TIMED_OUT=false
-SESSION_START=$(date +%s)
 
 while true; do
     PAYLOAD=$(jq -s --arg model "$MODEL" \
       '{model: $model, messages: .[0], tools: .[1], stream: false, temperature: 0, think: false}' \
       <(echo "$MESSAGES") <(echo "$TOOLS"))
 
-    RESPONSE=$(curl -s "$OLLAMA_URL" -H "Content-Type: application/json" -d "$PAYLOAD")
+    if ! RESPONSE=$(timeout "$STEP_TIMEOUT" curl -s "$OLLAMA_URL" -H "Content-Type: application/json" -d "$PAYLOAD"); then
+        echo -e "\n=== Step timed out after ${STEP_TIMEOUT}s (curl). Terminating. ==="
+        break
+    fi
     LAST_RESPONSE="$RESPONSE"
 
     TOOL_CALLS_ARRAY=$(
@@ -183,7 +183,7 @@ while true; do
     )
     NUM_CALLS=$(echo "$TOOL_CALLS_ARRAY" | jq 'length')
 
-    if [ "$NUM_CALLS" -eq 0 ]; then
+    if [ "${NUM_CALLS:-0}" -eq 0 ]; then
         if [ "$MISSING_COUNT" -eq 0 ] && [ "$STEP_COUNT" -eq 0 ]; then
             MISSING_COUNT=1
             echo "⚠️  No tool calls detected on first turn — retrying once..."
@@ -298,7 +298,7 @@ print(code.strip())
                     echo "   [ERROR]: Missing filename for javac."
                 else
                     echo "   [EXEC]: javac $FILENAME"
-                    if COMPILE_ERR=$(javac "$FILENAME" 2>&1); then
+                    if COMPILE_ERR=$(timeout "$STEP_TIMEOUT" javac "$FILENAME" 2>&1); then
                         OUT="Compilation successful. You can now execute the compiled class using 'java'."
                         echo "   [SUCCESS]: Compiled cleanly."
                     else
@@ -317,7 +317,7 @@ print(code.strip())
                     echo "   [ERROR]: Missing class_name for java tool."
                 else
                     echo "   [EXEC]: java $CLASS_NAME $RAW_ARGS"
-                    RUN_OUT=$(java $CLASS_NAME $RAW_ARGS 2>&1 || true)
+                    RUN_OUT=$(timeout "$STEP_TIMEOUT" java $CLASS_NAME $RAW_ARGS 2>&1 || true)
 
                     if echo "$RUN_OUT" | grep -q "ClassNotFoundException"; then
                         OUT="Program Execution Failed:\n$RUN_OUT\nHINT: Class '$CLASS_NAME.class' was not found. Ensure you call 'write_file' to save the Java source code and 'javac' to compile it before calling 'java'."
