@@ -11,16 +11,16 @@ CONFIG_DIR=".configs"
 SANITIZED_MODEL=$(echo "$MODEL" | sed 's/[/:]/_/g')
 PARSER_FILE="parser.py"
 if [ -f "$CONFIG_DIR/${SANITIZED_MODEL}.sh" ]; then
-    # Check if model ID has changed since profiling
+    # Check if model ID is present and matches current
     CURRENT_ID=$(ollama list 2>/dev/null | awk -v m="$MODEL" '$1==m {print $2}' || echo "")
     STORED_ID=$(python3 -c "import json; print(json.load(open('$CONFIG_DIR/${SANITIZED_MODEL}.config.json')).get('model_id', ''))" 2>/dev/null || echo "")
-    if [ -n "$CURRENT_ID" ] && [ -n "$STORED_ID" ] && [ "$CURRENT_ID" != "$STORED_ID" ]; then
-        echo "⚠️  Model ID changed ($STORED_ID → $CURRENT_ID). Re-profiling..."
+    if [ -z "$STORED_ID" ] || [ "$CURRENT_ID" != "$STORED_ID" ]; then
+        REASON=$( [ -z "$STORED_ID" ] && echo "no model_id in config" || echo "ID changed ($STORED_ID → $CURRENT_ID)" )
+        echo "⚠️  Re-profiling: $REASON"
         rm -f "$CONFIG_DIR/${SANITIZED_MODEL}.sh" "$CONFIG_DIR/${SANITIZED_MODEL}.config.json"
         bash ./profile_model.sh "$MODEL"
-    else
-        PARSER_FILE="$CONFIG_DIR/${SANITIZED_MODEL}.sh"
     fi
+    PARSER_FILE="$CONFIG_DIR/${SANITIZED_MODEL}.sh"
 elif [ -f "$CONFIG_DIR/${SANITIZED_MODEL}.py" ]; then
     PARSER_FILE="$CONFIG_DIR/${SANITIZED_MODEL}.py"
 else
@@ -219,7 +219,8 @@ while true; do
                             echo "   [SUCCESS]: Compiled cleanly."
                         else
                             OUT="Compilation failed with error:\n$COMPILE_ERR"
-                            echo "   [ERROR]: Compilation failed."
+                    echo "   [ERROR]: Compilation failed."
+                    echo "$COMPILE_ERR" | sed 's/^/   | /'
                         fi
                         ;;
                     java)
@@ -314,6 +315,7 @@ print(code.strip())
                 else
                     OUT="Compilation failed with error:\n$COMPILE_ERR\nPlease fix the source code using 'write_file' and re-compile."
                     echo "   [ERROR]: Compilation failed."
+                    echo "$COMPILE_ERR" | sed 's/^/   | /'
                 fi
                 ;;
 
@@ -375,6 +377,15 @@ HARNESS_EXIT=0
 if [ -f "hashprime.java" ]; then
     echo "🔍 Found hashprime.java on disk. Starting automated test harness..."
 
+    # Ensure tasks.json exists for regression tests
+    if [ ! -f "tasks.json" ]; then
+        if [ -f "sandbox/tasks.json" ]; then
+            cp sandbox/tasks.json tasks.json
+        elif [ -f "spec.yaml" ]; then
+            python3 spec_parser.py spec.yaml 2>/dev/null || true
+        fi
+    fi
+
     if COMPILE_LOG=$(javac hashprime.java 2>&1); then
         echo "✅ [HARNESS]: Compilation succeeded."
 
@@ -421,6 +432,9 @@ else
     echo "❌ [HARNESS]: hashprime.java was not found on disk. Skipping validation."
     HARNESS_EXIT=1
 fi
+
+echo ""
+echo "    AUTOMATED HARNESS VERDICT — $MODEL $( [ $HARNESS_EXIT -eq 0 ] && echo 'PASS' || echo 'FAIL' )"
 
 END_TIME=$(date +%s)
 TOTAL_WALL_TIME=$((END_TIME - START_TIME))
