@@ -123,6 +123,10 @@ PAYLOAD=$(jq -s --arg model "$MODEL" \
 echo "--> Sending probe request to Ollama (up to 3 attempts)..."
 CONFIG_FILE="$CONFIG_DIR/${SANITIZED_MODEL}.config.json"
 
+# Get current model ID from Ollama
+MODEL_ID=$(ollama list 2>/dev/null | awk -v m="$MODEL" '$1==m {print $2}' || echo "unknown")
+PROFILED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
 for attempt in 1 2 3; do
     RESPONSE=$(curl -s "$OLLAMA_URL" -H "Content-Type: application/json" -d "$PAYLOAD")
     echo "$RESPONSE" > "$RAW_RESPONSE_FILE"
@@ -131,8 +135,19 @@ for attempt in 1 2 3; do
 
     STAGE=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE')).get('stage'))")
     if [ "$STAGE" != "None" ]; then
+        # Add model_id and profiled_at to config
+        python3 -c "
+import json
+with open('$CONFIG_FILE') as f:
+    cfg = json.load(f)
+cfg['model_id'] = '$MODEL_ID'
+cfg['profiled_at'] = '$PROFILED_AT'
+with open('$CONFIG_FILE', 'w') as f:
+    json.dump(cfg, f, indent=2)
+"
         echo "📊 Saved raw response to: $RAW_RESPONSE_FILE"
         echo "✅ Detected format — stage $STAGE (attempt $attempt)"
+        echo "   Model ID: $MODEL_ID"
         break
     fi
     echo "⚠️  Attempt $attempt: no tool calls detected. Retrying..."

@@ -11,7 +11,16 @@ CONFIG_DIR=".configs"
 SANITIZED_MODEL=$(echo "$MODEL" | sed 's/[/:]/_/g')
 PARSER_FILE="parser.py"
 if [ -f "$CONFIG_DIR/${SANITIZED_MODEL}.sh" ]; then
-    PARSER_FILE="$CONFIG_DIR/${SANITIZED_MODEL}.sh"
+    # Check if model ID has changed since profiling
+    CURRENT_ID=$(ollama list 2>/dev/null | awk -v m="$MODEL" '$1==m {print $2}' || echo "")
+    STORED_ID=$(python3 -c "import json; print(json.load(open('$CONFIG_DIR/${SANITIZED_MODEL}.config.json')).get('model_id', ''))" 2>/dev/null || echo "")
+    if [ -n "$CURRENT_ID" ] && [ -n "$STORED_ID" ] && [ "$CURRENT_ID" != "$STORED_ID" ]; then
+        echo "⚠️  Model ID changed ($STORED_ID → $CURRENT_ID). Re-profiling..."
+        rm -f "$CONFIG_DIR/${SANITIZED_MODEL}.sh" "$CONFIG_DIR/${SANITIZED_MODEL}.config.json"
+        bash ./profile_model.sh "$MODEL"
+    else
+        PARSER_FILE="$CONFIG_DIR/${SANITIZED_MODEL}.sh"
+    fi
 elif [ -f "$CONFIG_DIR/${SANITIZED_MODEL}.py" ]; then
     PARSER_FILE="$CONFIG_DIR/${SANITIZED_MODEL}.py"
 else
