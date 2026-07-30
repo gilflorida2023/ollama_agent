@@ -99,7 +99,20 @@ def generate_tasks(spec):
     }
 
 
+def get_spec_metadata(spec):
+    """Return spec file path, filename, and class name."""
+    spec_file = spec.get("algorithm_reference", "prompt.hashprime.info")
+    filename = spec["project"]["file"]
+    class_name = filename.rsplit(".", 1)[0]
+    return {"spec_file": spec_file, "filename": filename, "class_name": class_name}
+
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "metadata":
+        spec = load_spec()
+        print(json.dumps(get_spec_metadata(spec)))
+        return
+
     path = sys.argv[1] if len(sys.argv) > 1 else "spec.yaml"
     spec = load_spec(path)
     tasks = generate_tasks(spec)

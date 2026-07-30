@@ -4,8 +4,12 @@ set +H
 set -e
 
 MODEL="${1:-qwen2.5-coder:7b}"
-SPEC_FILE="prompt.hashprime.info"
 OLLAMA_URL="http://localhost:11434/api/chat"
+
+SPEC_META=$(python3 "$(dirname "$0")/spec_parser.py" metadata)
+SPEC_FILE=$(echo "$SPEC_META" | jq -r '.spec_file')
+EXPECTED_FILENAME=$(echo "$SPEC_META" | jq -r '.filename')
+CLASS_TOKEN=$(echo "$SPEC_META" | jq -r '.class_name')
 
 CONFIG_DIR=".configs"
 mkdir -p "$CONFIG_DIR"
@@ -24,16 +28,6 @@ if [ ! -f "$SPEC_FILE" ]; then
 fi
 
 SPEC_TEXT=$(cat "$SPEC_FILE")
-
-shopt -s nocasematch
-if [[ "$SPEC_TEXT" =~ File:[[:space:]]*([^[:space:]]+\.java) ]]; then
-    EXPECTED_FILENAME="${BASH_REMATCH[1]}"
-else
-    EXPECTED_FILENAME="hashprime.java"
-fi
-shopt -u nocasematch
-
-CLASS_TOKEN="${EXPECTED_FILENAME%.java}"
 
 SYSTEM_PROMPT=$(sed "s/{{FILENAME}}/$EXPECTED_FILENAME/g; s/{{CLASS_TOKEN}}/$CLASS_TOKEN/g" prompts/system.txt)
 

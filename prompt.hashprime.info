@@ -59,7 +59,6 @@ Expected hash for empty stream:
 
 **Notes**
 - All output must be exactly 64 hexadecimal characters (lowercase).
-- The program must handle the error case by printing help and exiting with code 0 as specified.
 
 # Algorithm Reference (Optional — Choose ONE approach)
 

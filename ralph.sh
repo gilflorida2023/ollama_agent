@@ -40,12 +40,6 @@ fi
 
 cd "$SANDBOX_DIR"
 
-PARSER_FILE="$CONFIG_DIR/${SANITIZED_MODEL}.sh"
-if [ ! -f "$PARSER_FILE" ]; then
-    echo "Model parser config not found. Running profile_model.sh..."
-    ../profile_model.sh "$MODEL"
-fi
-
 if [ ! -d ".git" ]; then
     echo "Initializing sandbox git repository..."
     git init -q
@@ -96,6 +90,12 @@ CHANGEOF
 fi
 
 source "$INIT_FILE" 2>/dev/null || true
+
+PARSER_FILE="$CONFIG_DIR/${SANITIZED_MODEL}.sh"
+if [ ! -f "$PARSER_FILE" ]; then
+    echo "Model parser config not found. Running profile_model.sh..."
+    ../profile_model.sh "$MODEL"
+fi
 
 if git rev-parse --verify "$BRANCH_NAME" >/dev/null 2>&1; then
     git checkout "$BRANCH_NAME"

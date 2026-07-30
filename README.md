@@ -70,10 +70,11 @@ output triggers `git reset --hard` to the last known good state.
 ```
 ralph.sh (Manager)
   │
-  ├─ 1. spec_parser.py → tasks.json (with regression_tests)
+  ├─ 1. Initialize sandbox (copy spec.yaml, prompt.hashprime.info, generate tasks.json)
   ├─ 2. Pick highest-priority "failing" task
-  ├─ 3. Inject task context into prompt.hashprime.info
-  ├─ 4. Spawn complete.sh (Worker) with fresh context
+  ├─ 3. Run profile_model.sh if needed (uses spec_parser.py metadata)
+  ├─ 4. Inject task context into prompt.hashprime.info
+  ├─ 5. Spawn complete.sh (Worker) with fresh context
   │
   │   complete.sh (Worker)
   │     ├─ Send augmented prompt → Ollama API
@@ -81,12 +82,12 @@ ralph.sh (Manager)
   │     ├─ Capture model reasoning → .last_reasoning.txt
   │     └─ Run test harness (reads regression_tests from tasks.json)
   │
-  ├─ 5. task_runner.py verifies:
+  ├─ 6. task_runner.py verifies:
   │     a. Regression gate — re-run tests for all passing tasks
   │     b. Task-specific verification (compile + run)
-  ├─ 6. On pass: update tasks.json, append reasoning to CHANGELOG.md, git commit
+  ├─ 7. On pass: update tasks.json, append reasoning to CHANGELOG.md, git commit
   │   On fail: git reset --hard
-  └─ 7. Repeat until all tasks passing or MAX_TURNS
+  └─ 8. Repeat until all tasks passing or MAX_TURNS
 ```
 
 ## Scripts
@@ -112,14 +113,15 @@ a structured `spec.yaml` for spec-driven task generation.
 **Phase 1 — Initializer** (one-time):
 1. Creates `sandbox/` with a separate Git repository (never touches project `.git/`)
 2. Symlinks `complete.sh`, `parser.py`, `profile_model.sh`, `spec_parser.py`, `task_runner.py`, `prompts/`, `.configs/` into the sandbox
-3. Copies `spec.yaml` into the sandbox and runs `spec_parser.py` to generate `tasks.json`
-4. Creates `init.sh`, `CHANGELOG.md`, `progress.txt`
-5. Commits initial state to `main`
+3. Copies `spec.yaml` and `prompt.hashprime.info` into the sandbox
+4. Runs `spec_parser.py` to generate `tasks.json`
+5. Creates `init.sh`, `CHANGELOG.md`, `progress.txt`
+6. Commits initial state to `main`
 
 **Phase 2 — Worker Loop** (iterative):
-1. Switches to the model branch (`ralph_<sanitized_model>`)
-2. Checks `task_runner.check_all_completed()` for early exit
-3. Reads `tasks.json` → picks highest-priority `"failing"` task
+1. Checks `task_runner.check_all_completed()` for early exit
+2. Reads `tasks.json` → picks highest-priority `"failing"` task
+3. Checks for parser profile; runs `profile_model.sh` if needed (uses `spec_parser.py metadata`)
 4. Injects task context + progress into `prompt.hashprime.info`
 5. Invokes `complete.sh` in a fresh session
 6. Pipes task JSON to `task_runner.py verify` for compilation + verification + git commit/rollback
@@ -139,10 +141,12 @@ unaffected.
 
 Reads `spec.yaml` and generates `tasks.json`. All task metadata (IDs,
 descriptions, verification commands, expected outputs) is derived from
-the structured YAML spec — no hardcoded values.
+the structured YAML spec — no hardcoded values. Also provides spec
+metadata (filename, class name, spec file path) to other scripts.
 
 ```
 python3 spec_parser.py spec.yaml
+python3 spec_parser.py metadata  # Returns JSON: {spec_file, filename, class_name}
 ```
 
 ---
@@ -184,12 +188,13 @@ python3 task_runner.py check_all
 Probes a single model to detect which parser stage it uses. Called automatically by `complete.sh` when no parser profile exists.
 
 **Flow:**
-1. Reads the spec file (`prompt.hashprime.info`), extracts expected filename from the `File:` line
-2. Sends a diagnostic request to Ollama with the spec prompt + tool schemas
-3. Runs `parser.py --probe` on the response — returns the stage number that first matches
-4. Saves the detected stage to `.configs/<sanitized_model>.config.json` (e.g. `{"stage": 6}`)
-5. Saves the raw Ollama response to `.configs/<sanitized_model>.raw.json`
-6. Creates a thin parser wrapper `.configs/<sanitized_model>.sh`:
+1. Calls `spec_parser.py metadata` to get spec file path, expected filename, and class name from `spec.yaml`
+2. Reads the spec file, extracts expected filename from the `File:` line
+3. Sends a diagnostic request to Ollama with the spec prompt + tool schemas
+4. Runs `parser.py --probe` on the response — returns the stage number that first matches
+5. Saves the detected stage to `.configs/<sanitized_model>.config.json` (e.g. `{"stage": 6}`)
+6. Saves the raw Ollama response to `.configs/<sanitized_model>.raw.json`
+7. Creates a thin parser wrapper `.configs/<sanitized_model>.sh`:
    ```bash
    exec python3 "$(dirname "$0")/../parser.py" --model "$(basename "$0" .sh)"
    ```
@@ -357,7 +362,7 @@ identifies the expected filename and class token.
 
 | Placeholder | Substituted With | Source Script |
 |-------------|-----------------|---------------|
-| `{{FILENAME}}` | Target Java filename (e.g. `hashprime.java`) | `complete.sh` (line 72), `profile_model.sh` (line 38) |
+| `{{FILENAME}}` | Target Java filename (e.g. `hashprime.java`) | `complete.sh` (line 72), `profile_model.sh` (uses `spec_parser.py metadata`) |
 | `{{CLASS_TOKEN}}` | Class name derived from filename (e.g. `hashprime`) | `complete.sh`, `profile_model.sh` |
 
 Default content:
@@ -442,11 +447,11 @@ Your code must pass both the task verification and the regression tests.
 | File | Role |
 |------|------|
 | `spec.yaml` | Structured project specification with validation table (source of truth: filename, input, output, constraints) |
-| `spec_parser.py` | Reads `spec.yaml` → generates `tasks.json` with `filename`, `regression_tests`, and per-task entries |
+| `spec_parser.py` | Reads `spec.yaml` → generates `tasks.json` with `filename`, `regression_tests`, and per-task entries; also provides `metadata` command for spec file path |
 | `task_runner.py` | Verification, regression gate, reasoning capture, progress tracking, git operations |
 | `ralph.sh` | Long-running agent harness (Manager) — thin orchestrator |
 | `complete.sh` | Single-session agent loop + spec-driven test harness + auto-inject filename (Worker) |
-| `profile_model.sh` | Model format probe + parser config generator |
+| `profile_model.sh` | Model format probe + parser config generator (uses `spec_parser.py metadata` for spec info) |
 | `parser.py` | 8-stage cascading tool-call extractor |
 | `toto.sh` | Batch runner — iterates all Ollama models |
 | `progress_tracker.py` | JSON progress state API used by task_runner.py |
