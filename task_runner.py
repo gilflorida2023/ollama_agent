@@ -9,6 +9,22 @@ TASKS_FILE = "tasks.json"
 PROGRESS_TRACKER = "progress_tracker.json"
 CHANGELOG_FILE = "CHANGELOG.md"
 PROGRESS_FILE = "progress.txt"
+OKF_GENERATOR = "okf_generator.py"
+
+
+def _regenerate_okf():
+    """Regenerate OKF knowledge bundle after state changes."""
+    import subprocess
+    sandbox_dir = os.path.dirname(os.path.abspath(TASKS_FILE))
+    gen_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), OKF_GENERATOR)
+    if os.path.exists(gen_path):
+        try:
+            subprocess.run(
+                ["python3", gen_path, sandbox_dir],
+                capture_output=True, timeout=10
+            )
+        except Exception:
+            pass
 
 
 def load_tasks(path=TASKS_FILE):
@@ -132,9 +148,12 @@ def verify_and_commit(task, turn, ts_human, branch_name):
     _update_progress_tracker(task_id, passed)
 
     if passed:
-        return _mark_passed(task_id, ts_human, turn, branch_name)
+        result = _mark_passed(task_id, ts_human, turn, branch_name)
     else:
-        return _fail_and_rollback(task_id, ts_human, turn, branch_name)
+        result = _fail_and_rollback(task_id, ts_human, turn, branch_name)
+
+    _regenerate_okf()
+    return result
 
 
 def _update_progress_tracker(task_id, success):
@@ -195,7 +214,43 @@ def _fail_and_rollback(task_id, ts_human, turn, branch_name):
     for pattern in ["*.java", "*.class"]:
         subprocess.run(["rm", "-f", pattern], shell=True, capture_output=True)
     print(f"  Rolled back to last good commit on {branch_name}")
+    _record_failure_observation(task_id, reasoning)
     return False
+
+
+def _record_failure_observation(task_id, reasoning):
+    """Record a failure observation as an OKF skill for future reference."""
+    import subprocess
+    gen_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "skill_recorder.py")
+    if not os.path.exists(gen_path):
+        return
+    if not reasoning:
+        return
+    # Create a unique ID for this failure observation
+    safe_id = f"observed-{task_id}"
+    tags = ["observed", "failure", task_id]
+    body = f"""# Observed Failure: {task_id}
+
+## Context
+
+Task `{task_id}` failed during verification.
+
+## Model Reasoning
+
+{reasoning[:500]}
+
+## Recommendation
+
+Review this failure pattern. If it recurs, create a formal Failure Mode skill.
+"""
+    try:
+        subprocess.run(
+            ["python3", gen_path, "record", "failure-modes", safe_id,
+             f"Observed: {task_id}", ",".join(tags), body],
+            capture_output=True, timeout=10
+        )
+    except Exception:
+        pass
 
 
 def check_all_completed(spec_tasks=None):

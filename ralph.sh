@@ -24,7 +24,7 @@ echo "=========================================="
 
 mkdir -p "$SANDBOX_DIR"
 
-for f in complete.sh parser.py profile_model.sh progress_tracker.py spec_parser.py task_runner.py; do
+for f in complete.sh parser.py profile_model.sh progress_tracker.py spec_parser.py task_runner.py okf_generator.py skill_recorder.py; do
     if [ ! -L "$SANDBOX_DIR/$f" ] && [ ! -f "$SANDBOX_DIR/$f" ]; then
         ln -s "../$f" "$SANDBOX_DIR/$f"
     fi
@@ -73,6 +73,9 @@ INITEOF
     echo "Generating tasks.json from spec.yaml..."
     python3 ../spec_parser.py "spec.yaml"
 
+    echo "Generating OKF knowledge bundle..."
+    python3 ../okf_generator.py .
+
     cat > "$CHANGELOG_FILE" << 'CHANGEOF'
 # Changelog
 
@@ -106,7 +109,7 @@ else
 fi
 
 generate_task_prompt() {
-    local task_id="$1" task_desc="$2" verify_cmd="$3" expected_out="$4" passing_tasks="$5" regression_inputs="$6" filename="$7"
+    local task_id="$1" task_desc="$2" verify_cmd="$3" expected_out="$4" passing_tasks="$5" regression_inputs="$6" filename="$7" skill_ctx="$8" failure_ctx="$9"
     local tmpl="prompts/task_context.txt"
 
     local header
@@ -145,9 +148,21 @@ PYEOF
     local real_spec
     real_spec=$(cat "../$SPEC_FILE" 2>/dev/null || cat "$SPEC_FILE" 2>/dev/null || echo "Spec file not found.")
 
+    local skill_block=""
+    if [ -n "$skill_ctx" ] || [ -n "$failure_ctx" ]; then
+        skill_block="=== KNOWN KNOWLEDGE ===
+${skill_ctx}
+${failure_ctx}
+"
+    fi
+
     {
         echo "$header"
         echo ""
+        if [ -n "$skill_block" ]; then
+            echo "$skill_block"
+            echo ""
+        fi
         echo "--- ORIGINAL SPECIFICATION FOLLOWS ---"
         echo "$real_spec"
     } > "$SPEC_FILE"
@@ -238,6 +253,29 @@ print(', '.join(t['input'] for t in rt))
 
     PROJECT_FILE=$(jq -r '.filename // "hashprime.java"' "$TASKS_FILE" 2>/dev/null || echo "hashprime.java")
 
+    # Search for relevant skills and failure modes
+    SKILL_CONTEXT=$(python3 ../skill_recorder.py search --tags "parser" 2>/dev/null | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    skills = [s['title'] for s in data[:3]]
+    if skills:
+        print('Known skills: ' + ', '.join(skills))
+except:
+    pass
+" 2>/dev/null || echo "")
+
+    FAILURE_CONTEXT=$(python3 ../skill_recorder.py search --type "Failure Mode" 2>/dev/null | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    modes = [s['title'] for s in data[:3]]
+    if modes:
+        print('Known failure modes: ' + ', '.join(modes))
+except:
+    pass
+" 2>/dev/null || echo "")
+
     echo "Task: $TASK_ID"
     echo "  $TASK_DESC"
 
@@ -249,7 +287,7 @@ print(', '.join(t['input'] for t in rt))
         echo "Passing: $PASSING_TASKS"
     } >> "$PROGRESS_FILE"
 
-    generate_task_prompt "$TASK_ID" "$TASK_DESC" "$VERIFY_CMD" "$EXPECTED_OUT" "$PASSING_TASKS" "$REGRESSION_INPUTS" "$PROJECT_FILE"
+    generate_task_prompt "$TASK_ID" "$TASK_DESC" "$VERIFY_CMD" "$EXPECTED_OUT" "$PASSING_TASKS" "$REGRESSION_INPUTS" "$PROJECT_FILE" "$SKILL_CONTEXT" "$FAILURE_CONTEXT"
 
     echo ""
     echo "--- Starting fresh worker session (up to 10 tool steps per session) ---"
