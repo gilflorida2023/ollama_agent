@@ -480,7 +480,7 @@ for t in tests:
             stderr=subprocess.STDOUT,
             timeout=60
         ).decode().replace("\r", "").replace("\n", "").strip()
-    except subprocess.TimeExpired:
+    except subprocess.TimeoutExpired:
         actual = "TIMEOUT"
     except subprocess.CalledProcessError as e:
         actual = f"EXIT_CODE_{e.returncode}"
