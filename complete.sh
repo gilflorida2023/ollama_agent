@@ -3,7 +3,7 @@
 set +H
 set -e
 
-MODEL="${1:-qwen2.5-coder:7b}"
+MODEL="${1:-qwen3.5:9b-mlx}"
 SPEC_FILE="prompt.hashprime.info"
 OLLAMA_URL="http://localhost:11434/api/chat"
 
@@ -333,11 +333,16 @@ print(code.strip())
                 QUERY=$(echo "$TOOL_ARGS" | jq -r '.query // empty')
                 echo "   [OKF SEARCH]: $QUERY"
                 RESULT=""
+
+                # Build regex matching any word in the query (split on spaces)
+                WORDS_REGEX=$(echo "$QUERY" | tr ' ' '|' | sed 's/|/\\|/g')
+
                 for dir in "knowledge/trusted_bundles" "knowledge/new_bundles"; do
                     if [ -d "$dir" ]; then
-                        FOUND=$(grep -r -i --include="*.md" "$QUERY" "$dir/" 2>/dev/null || true)
+                        # Search for each word individually, return matching lines
+                        FOUND=$(grep -r -i -E --include="*.md" "$WORDS_REGEX" "$dir/" 2>/dev/null | head -20 || true)
                         if [ -n "$FOUND" ]; then
-                            RESULT="${RESULT}\n=== ${dir} ===\n${FOUND}\n"
+                            RESULT="${RESULT}\n=== Results from ${dir} ===\n${FOUND}\n"
                         fi
                     fi
                 done
