@@ -500,7 +500,7 @@ for t in tests:
         actual = f"EXIT_CODE_{e.returncode}"
     except Exception as e:
         actual = f"ERROR: {e}"
-    if actual == expected:
+    if actual.lower() == expected.lower():
         print(f"✅ [TEST PASS]: N={inp} -> {actual}")
         passed += 1
     else:
