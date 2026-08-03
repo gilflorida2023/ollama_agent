@@ -157,23 +157,44 @@ def detect_content_dir(repo_dir):
     """Auto-detect content directory in a cloned repository."""
     repo_path = Path(repo_dir)
     
-    # Look for directories with markdown or XML files
+    IGNORE_DIRS = {'vendor', 'node_modules', 'solutions', '_build', 'target',
+                   '.git', '__pycache__', 'dist', 'build', '.venv', 'venv'}
+    
+    # Check root directory first (most common case for repos with root-level .md)
+    root_md = list(repo_path.glob("*.md"))
+    root_xml = list(repo_path.glob("*.xml"))
+    if root_md:
+        relative = "."
+        print(f"  Using root directory (markdown)")
+        return str(repo_path), "markdown"
+    if root_xml:
+        print(f"  Using root directory (XML)")
+        return str(repo_path), "xml"
+    
+    # Look for subdirectories with markdown or XML files
     md_dirs = []
     xml_dirs = []
     
     for subdir in repo_path.rglob("*"):
         if subdir.is_dir():
+            # Skip ignored directories
+            rel_parts = subdir.relative_to(repo_path).parts
+            if any(part in IGNORE_DIRS for part in rel_parts):
+                continue
+            
             md_files = list(subdir.glob("*.md"))
             xml_files = list(subdir.glob("*.xml"))
             if md_files:
-                md_dirs.append((subdir, len(md_files)))
+                # Prefer directories closer to root (shallower depth)
+                depth = len(rel_parts)
+                md_dirs.append((subdir, len(md_files), depth))
             if xml_files:
                 xml_dirs.append((subdir, len(xml_files)))
     
     # Prefer markdown directories
     if md_dirs:
-        # Sort by file count, return directory with most files
-        md_dirs.sort(key=lambda x: x[1], reverse=True)
+        # Sort by depth first (closer to root), then by file count
+        md_dirs.sort(key=lambda x: (x[2], -x[1]))
         best_dir = md_dirs[0][0]
         print(f"  Auto-detected markdown content: {best_dir.relative_to(repo_path)}/")
         return str(best_dir), "markdown"
@@ -184,16 +205,6 @@ def detect_content_dir(repo_dir):
         best_dir = xml_dirs[0][0]
         print(f"  Auto-detected XML content: {best_dir.relative_to(repo_path)}/")
         return str(best_dir), "xml"
-    
-    # Check root directory
-    root_md = list(repo_path.glob("*.md"))
-    root_xml = list(repo_path.glob("*.xml"))
-    if root_md:
-        print(f"  Using root directory (markdown)")
-        return str(repo_path), "markdown"
-    if root_xml:
-        print(f"  Using root directory (XML)")
-        return str(repo_path), "xml"
     
     return None, None
 
