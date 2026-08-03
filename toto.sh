@@ -1,16 +1,12 @@
 #!/usr/bin/env bash
-set -e
+
 clear
 
-# Kill any leftover java/javac processes from previous runs
 cleanup_children() {
     echo "Cleaning up child processes..."
     pkill -f "java hashprime" 2>/dev/null || true
     pkill -f "javac hashprime" 2>/dev/null || true
     pkill -f "timeout.*curl.*localhost:11434" 2>/dev/null || true
-    ollama ps 2>/dev/null | tail -n +2 | awk '{print $1}' | while read -r model; do
-        [ -n "$model" ] && ollama stop "$model" 2>/dev/null || true
-    done
 }
 
 trap cleanup_children EXIT INT TERM
@@ -18,13 +14,29 @@ trap cleanup_children EXIT INT TERM
 rm -rf logs/ sandbox/
 mkdir -p logs
 
+RESULTS_FILE="logs/results_summary.txt"
+echo "=== Model Benchmark Results ===" > "$RESULTS_FILE"
+echo "Date: $(date)" >> "$RESULTS_FILE"
+echo "" >> "$RESULTS_FILE"
+
 for i in $(ollama list | grep -Ev 'NAME|embed|ocr' | sed -e 's/ .*//'); do
-    filename="logs/$(echo "$i" | tr ':/' '_')_$(date +'%a_%b_%d_%H_%M_%S_%Z_%Y').txt"
-    echo "Writing ${filename}"
+    safe_name=$(echo "$i" | tr ':/' '_')
+    filename="logs/${safe_name}.txt"
+    echo "=========================================="
+    echo "==> Testing model: $i"
+    echo "==> Log: ${filename}"
+    echo "=========================================="
 
     cleanup_children
     sleep 1
 
-    #bash ./ralph.sh "$i" 30 2>&1 | tee "${filename}" | tee -a "logs/toto.log"
-    bash ./complete.sh "$i" 30 2>&1 | tee "${filename}" | tee -a "logs/toto.log"
+    bash ./complete.sh "$i" 2>&1 | tee "${filename}"
+
+    echo "" >> "$RESULTS_FILE"
+    echo "--- Model: $i ---" >> "$RESULTS_FILE"
+    grep -E "VERDICT|Harness|passed|failed" "${filename}" >> "$RESULTS_FILE" 2>/dev/null || echo "No results found" >> "$RESULTS_FILE"
 done
+
+echo ""
+echo "=== Summary ==="
+cat "$RESULTS_FILE"
