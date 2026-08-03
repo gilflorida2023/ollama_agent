@@ -68,11 +68,16 @@ rm -f *.class *.java 2>&1 >/dev/null || true
 echo "--> Reading specification file..."
 SPEC_TEXT=$(cat "$SPEC_FILE")
 
+# Extract filename from spec: handles both plain "File: foo.java" and markdown "**File**: `foo.java`"
 shopt -s nocasematch
-if [[ "$SPEC_TEXT" =~ File:[[:space:]]*([^[:space:]]+\.java) ]]; then
+if [[ "$SPEC_TEXT" =~ \*\*File\*\*:[[:space:]]*\`([^[:space:]]+\.java)\` ]]; then
+    EXPECTED_FILENAME="${BASH_REMATCH[1]}"
+elif [[ "$SPEC_TEXT" =~ File:[[:space:]]*([^[:space:]]+\.java) ]]; then
     EXPECTED_FILENAME="${BASH_REMATCH[1]}"
 else
-    EXPECTED_FILENAME="hashprime.java"
+    # Fallback: look for any .java filename in the spec
+    EXPECTED_FILENAME=$(echo "$SPEC_TEXT" | grep -oE '[a-zA-Z0-9_-]+\.java' | head -1)
+    [ -z "$EXPECTED_FILENAME" ] && EXPECTED_FILENAME="Main.java"
 fi
 shopt -u nocasematch
 
@@ -249,6 +254,11 @@ print(json.dumps({"role": "tool", "content": content}))
                 # Enforce spec filename: if model wrote a .java file with wrong name, rename it
                 if [[ "$FILENAME" == *.java && "$FILENAME" != "$EXPECTED_FILENAME" ]]; then
                     echo "   [AUTO-FIX]: Model wrote '$FILENAME' but spec requires '$EXPECTED_FILENAME'. Renaming."
+                    # Fix class name inside content to match expected filename
+                    CLASS_FROM_FILE="${FILENAME%.java}"
+                    # Capitalize first letter of expected class name (hashprime -> Hashprime)
+                    CLASS_EXPECTED="$(echo "${EXPECTED_FILENAME%.java}" | sed 's/^./\U&/')"
+                    CONTENT=$(echo "$CONTENT" | sed "s/class ${CLASS_FROM_FILE}/class ${CLASS_EXPECTED}/g")
                     FILENAME="$EXPECTED_FILENAME"
                 fi
 
