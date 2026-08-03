@@ -1128,10 +1128,229 @@ OKF Command Loop — Available Commands:
 """)
 
 
+def execute_command(cmd, args):
+    """Execute a single OKF command. Returns 'quit' to signal loop exit, None otherwise."""
+    if cmd == "quit" or cmd == "exit":
+        print("Goodbye.")
+        return "quit"
+
+    elif cmd == "help":
+        print_help()
+
+    elif cmd == "ingest":
+        if not args:
+            print("Usage: ingest <url>")
+            print("Example: ingest https://github.com/HoGentTIN/linux-training-hogent.git")
+            return None
+
+        url = args.strip()
+        repo_name = extract_repo_name(url)
+        local_dir = os.path.join(CORPORA_DIR, repo_name)
+
+        # Clone the repository
+        if not clone_repo(url, local_dir):
+            return None
+
+        # Auto-detect content directory
+        print(f"\nAuto-detecting content in {repo_name}...")
+        content_dir, content_type = detect_content_dir(local_dir)
+        
+        if not content_dir:
+            print(f"Error: No content found in {repo_name}")
+            cleanup_repo(local_dir)
+            return None
+
+        # Process the corpus
+        print(f"\nDeep semantic processing for {repo_name}...")
+        concepts = process_corpus(content_dir, repo_name, url, content_type)
+        print(f"  Created {len(concepts)} concepts")
+
+        # LLM enrichment (optional)
+        print("  Level 4: LLM enrichment (if Ollama available)...")
+        model = os.environ.get("OKF_LLM_MODEL", "qwen2.5-coder:7b")
+        enriched = 0
+        for c in concepts[:5]:
+            enrichment = llm_enrich_concept(c["path"], model)
+            if enrichment:
+                enriched += 1
+        print(f"  Enriched {enriched} concepts with LLM")
+
+        # Embeddings
+        print("  Generating embeddings...")
+        engine = EmbeddingEngine()
+        if engine.available:
+            for c in concepts:
+                try:
+                    content = open(c["path"]).read()
+                    body_start = content.find("---", 3) + 3
+                    text = content[body_start:2000]
+                    engine.upsert(c["id"], repo_name, text, c["tags"], "new", c["path"])
+                except Exception:
+                    pass
+            print(f"  Stored {len(concepts)} embeddings in Qdrant")
+        else:
+            print("  Skipped (Qdrant not available)")
+
+        # Generate indexes
+        print("  Generating indexes...")
+        generate_indexes()
+        generate_master_index()
+
+        # Cleanup converted XML directory if it exists
+        converted_dir = content_dir + "_converted"
+        if os.path.exists(converted_dir):
+            cleanup_repo(converted_dir)
+
+        # Cleanup cloned repository
+        print(f"\nIngestion complete. Cleaning up cloned repository...")
+        cleanup_repo(local_dir)
+
+        print(f"\nDone! Ingested {len(concepts)} concepts from {repo_name}")
+        print(f"Location: knowledge/new_bundles/reference/")
+
+    elif cmd == "ingest_url":
+        if not args:
+            print("Usage: ingest_url <url>")
+            print("Example: ingest_url https://ghuntley.com/ralph/")
+            return None
+
+        url = args.strip()
+        print(f"\nIngesting URL content...")
+        result = ingest_url(url)
+        
+        if result:
+            # Generate indexes
+            print("  Generating indexes...")
+            generate_indexes()
+            generate_master_index()
+            
+            print(f"\nDone! Ingested content from {url}")
+            print(f"Concept: {result['id']}")
+            print(f"Location: knowledge/new_bundles/reference/")
+        else:
+            print(f"\nFailed to ingest content from {url}")
+
+    elif cmd == "ingest_crawl":
+        if not args:
+            print("Usage: ingest_crawl <url> [corpus_name]")
+            print("Example: ingest_crawl https://www.debian.org/doc/manuals/debian-reference/")
+            return None
+
+        crawl_parts = args.strip().split(maxsplit=1)
+        crawl_url = crawl_parts[0]
+        corpus_name = crawl_parts[1] if len(crawl_parts) > 1 else None
+        
+        print(f"\nCrawling website...")
+        concepts = asyncio.run(crawl_and_ingest(crawl_url, corpus_name))
+        
+        if concepts:
+            # Generate indexes
+            print("  Generating indexes...")
+            generate_indexes()
+            generate_master_index()
+            
+            new_count = sum(1 for c in concepts if not c.get("existing", False))
+            existing_count = sum(1 for c in concepts if c.get("existing", False))
+            
+            print(f"\nDone! Crawled {len(concepts)} pages")
+            if new_count > 0:
+                print(f"  New: {new_count}")
+            if existing_count > 0:
+                print(f"  Existing: {existing_count}")
+            print(f"Location: knowledge/new_bundles/reference/")
+        else:
+            print(f"\nFailed to crawl content from {crawl_url}")
+
+    elif cmd == "search":
+        if not args:
+            print("Usage: search <query>")
+            return None
+
+        print(f"\nSearching for: {args}")
+        results = hybrid_search(args)
+
+        if not results:
+            print("No results found.")
+        else:
+            print(f"\nFound {len(results)} results:\n")
+            for i, r in enumerate(results, 1):
+                match_type = r.get("match_type", "unknown")
+                score = r.get("score", 0)
+                tags_str = ", ".join(r.get("tags", [])[:3])
+                print(f"  {i}. {r['concept_id']} [{match_type}: {score:.2f}]")
+                print(f"     Tags: {tags_str}")
+                print(f"     Path: {r.get('file_path', 'N/A')}")
+                print()
+
+    elif cmd == "promote":
+        if not args:
+            print("Usage: promote <concept_id>")
+            return None
+        promote_concept(args.strip())
+
+    elif cmd == "list":
+        category = None
+        corpus = None
+        if args:
+            list_parts = args.split()
+            i = 0
+            while i < len(list_parts):
+                if list_parts[i] == "--corpus" and i + 1 < len(list_parts):
+                    corpus = list_parts[i + 1]
+                    i += 2
+                else:
+                    category = list_parts[i]
+                    i += 1
+        list_concepts(category=category, corpus=corpus)
+
+    elif cmd == "corpora":
+        list_corpora()
+
+    elif cmd == "remove":
+        if not args:
+            print("Usage: remove <corpus_name>")
+            return None
+        corpus_name = args.strip()
+        confirm = input(f"Remove all concepts from '{corpus_name}'? [y/N] ").strip().lower()
+        if confirm == "y":
+            remove_corpus(corpus_name)
+
+    elif cmd == "browse":
+        if not args:
+            print("Usage: browse <category_or_concept>")
+            return None
+        browse_category(args.strip())
+
+    elif cmd == "view":
+        if not args:
+            print("Usage: view <concept_id>")
+            return None
+        view_concept(args.strip())
+
+    elif cmd == "cleanup":
+        if args:
+            cleanup_repo(os.path.join(CORPORA_DIR, args.strip()))
+        else:
+            confirm = input("Remove all cloned corpora? [y/N] ").strip().lower()
+            if confirm == "y":
+                if os.path.exists(CORPORA_DIR):
+                    import shutil
+                    shutil.rmtree(CORPORA_DIR)
+                    print(f"Removed all corpora: {CORPORA_DIR}")
+        generate_indexes()
+
+    else:
+        print(f"Unknown command: {cmd}. Type 'help' for available commands.")
+
+    return None
+
+
 def main():
     print("=" * 60)
     print("OKF Command Loop v1.0")
     print("Type 'help' for available commands.")
+    print("Type 'quit' to exit.")
+    print("Tip: use ';' to chain commands on one line, e.g: search foo; list reference")
     print("=" * 60)
 
     # Ensure knowledge directories exist
@@ -1149,221 +1368,21 @@ def main():
         if not user_input:
             continue
 
-        parts = user_input.split(maxsplit=1)
-        cmd = parts[0].lower()
-        args = parts[1] if len(parts) > 1 else ""
+        # Split on semicolons for chained commands
+        commands = user_input.split(";")
 
-        if cmd == "quit" or cmd == "exit":
-            print("Goodbye.")
-            break
-
-        elif cmd == "help":
-            print_help()
-
-        elif cmd == "ingest":
-            if not args:
-                print("Usage: ingest <url>")
-                print("Example: ingest https://github.com/HoGentTIN/linux-training-hogent.git")
+        for cmd_str in commands:
+            cmd_str = cmd_str.strip()
+            if not cmd_str:
                 continue
 
-            url = args.strip()
-            repo_name = extract_repo_name(url)
-            local_dir = os.path.join(CORPORA_DIR, repo_name)
+            parts = cmd_str.split(maxsplit=1)
+            cmd = parts[0].lower()
+            args = parts[1] if len(parts) > 1 else ""
 
-            # Clone the repository
-            if not clone_repo(url, local_dir):
-                continue
-
-            # Auto-detect content directory
-            print(f"\nAuto-detecting content in {repo_name}...")
-            content_dir, content_type = detect_content_dir(local_dir)
-            
-            if not content_dir:
-                print(f"Error: No content found in {repo_name}")
-                cleanup_repo(local_dir)
-                continue
-
-            # Process the corpus
-            print(f"\nDeep semantic processing for {repo_name}...")
-            concepts = process_corpus(content_dir, repo_name, url, content_type)
-            print(f"  Created {len(concepts)} concepts")
-
-            # LLM enrichment (optional)
-            print("  Level 4: LLM enrichment (if Ollama available)...")
-            model = os.environ.get("OKF_LLM_MODEL", "qwen2.5-coder:7b")
-            enriched = 0
-            for c in concepts[:5]:
-                enrichment = llm_enrich_concept(c["path"], model)
-                if enrichment:
-                    enriched += 1
-            print(f"  Enriched {enriched} concepts with LLM")
-
-            # Embeddings
-            print("  Generating embeddings...")
-            engine = EmbeddingEngine()
-            if engine.available:
-                for c in concepts:
-                    try:
-                        content = open(c["path"]).read()
-                        body_start = content.find("---", 3) + 3
-                        text = content[body_start:2000]
-                        engine.upsert(c["id"], repo_name, text, c["tags"], "new", c["path"])
-                    except Exception:
-                        pass
-                print(f"  Stored {len(concepts)} embeddings in Qdrant")
-            else:
-                print("  Skipped (Qdrant not available)")
-
-            # Generate indexes
-            print("  Generating indexes...")
-            generate_indexes()
-            generate_master_index()
-
-            # Cleanup converted XML directory if it exists
-            converted_dir = content_dir + "_converted"
-            if os.path.exists(converted_dir):
-                cleanup_repo(converted_dir)
-
-            # Cleanup cloned repository
-            print(f"\nIngestion complete. Cleaning up cloned repository...")
-            cleanup_repo(local_dir)
-
-            print(f"\nDone! Ingested {len(concepts)} concepts from {repo_name}")
-            print(f"Location: knowledge/new_bundles/reference/")
-
-        elif cmd == "ingest_url":
-            if not args:
-                print("Usage: ingest_url <url>")
-                print("Example: ingest_url https://ghuntley.com/ralph/")
-                continue
-
-            url = args.strip()
-            print(f"\nIngesting URL content...")
-            result = ingest_url(url)
-            
-            if result:
-                # Generate indexes
-                print("  Generating indexes...")
-                generate_indexes()
-                generate_master_index()
-                
-                print(f"\nDone! Ingested content from {url}")
-                print(f"Concept: {result['id']}")
-                print(f"Location: knowledge/new_bundles/reference/")
-            else:
-                print(f"\nFailed to ingest content from {url}")
-
-        elif cmd == "ingest_crawl":
-            if not args:
-                print("Usage: ingest_crawl <url> [corpus_name]")
-                print("Example: ingest_crawl https://www.debian.org/doc/manuals/debian-reference/")
-                continue
-
-            parts = args.strip().split(maxsplit=1)
-            crawl_url = parts[0]
-            corpus_name = parts[1] if len(parts) > 1 else None
-            
-            print(f"\nCrawling website...")
-            concepts = asyncio.run(crawl_and_ingest(crawl_url, corpus_name))
-            
-            if concepts:
-                # Generate indexes
-                print("  Generating indexes...")
-                generate_indexes()
-                generate_master_index()
-                
-                new_count = sum(1 for c in concepts if not c.get("existing", False))
-                existing_count = sum(1 for c in concepts if c.get("existing", False))
-                
-                print(f"\nDone! Crawled {len(concepts)} pages")
-                if new_count > 0:
-                    print(f"  New: {new_count}")
-                if existing_count > 0:
-                    print(f"  Existing: {existing_count}")
-                print(f"Location: knowledge/new_bundles/reference/")
-            else:
-                print(f"\nFailed to crawl content from {crawl_url}")
-
-        elif cmd == "search":
-            if not args:
-                print("Usage: search <query>")
-                continue
-
-            print(f"\nSearching for: {args}")
-            results = hybrid_search(args)
-
-            if not results:
-                print("No results found.")
-            else:
-                print(f"\nFound {len(results)} results:\n")
-                for i, r in enumerate(results, 1):
-                    match_type = r.get("match_type", "unknown")
-                    score = r.get("score", 0)
-                    tags_str = ", ".join(r.get("tags", [])[:3])
-                    print(f"  {i}. {r['concept_id']} [{match_type}: {score:.2f}]")
-                    print(f"     Tags: {tags_str}")
-                    print(f"     Path: {r.get('file_path', 'N/A')}")
-                    print()
-
-        elif cmd == "promote":
-            if not args:
-                print("Usage: promote <concept_id>")
-                continue
-            promote_concept(args.strip())
-
-        elif cmd == "list":
-            category = None
-            corpus = None
-            if args:
-                parts = args.split()
-                i = 0
-                while i < len(parts):
-                    if parts[i] == "--corpus" and i + 1 < len(parts):
-                        corpus = parts[i + 1]
-                        i += 2
-                    else:
-                        category = parts[i]
-                        i += 1
-            list_concepts(category=category, corpus=corpus)
-
-        elif cmd == "corpora":
-            list_corpora()
-
-        elif cmd == "remove":
-            if not args:
-                print("Usage: remove <corpus_name>")
-                continue
-            corpus_name = args.strip()
-            confirm = input(f"Remove all concepts from '{corpus_name}'? [y/N] ").strip().lower()
-            if confirm == "y":
-                remove_corpus(corpus_name)
-
-        elif cmd == "browse":
-            if not args:
-                print("Usage: browse <category_or_concept>")
-                continue
-            browse_category(args.strip())
-
-        elif cmd == "view":
-            if not args:
-                print("Usage: view <concept_id>")
-                continue
-            view_concept(args.strip())
-
-        elif cmd == "cleanup":
-            if args:
-                cleanup_repo(os.path.join(CORPORA_DIR, args.strip()))
-            else:
-                confirm = input("Remove all cloned corpora? [y/N] ").strip().lower()
-                if confirm == "y":
-                    if os.path.exists(CORPORA_DIR):
-                        import shutil
-                        shutil.rmtree(CORPORA_DIR)
-                        print(f"Removed all corpora: {CORPORA_DIR}")
-            generate_indexes()
-
-        else:
-            print(f"Unknown command: {cmd}. Type 'help' for available commands.")
+            result = execute_command(cmd, args)
+            if result == "quit":
+                return
 
 
 if __name__ == "__main__":
