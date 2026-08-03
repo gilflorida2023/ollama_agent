@@ -246,6 +246,16 @@ print(json.dumps({"role": "tool", "content": content}))
                     echo "   [AUTO-FIX]: Filename was null/empty. Auto-injecting '$EXPECTED_FILENAME' from spec."
                 fi
 
+                # Enforce spec filename: if model wrote a .java file with wrong name, rename it
+                if [[ "$FILENAME" == *.java && "$FILENAME" != "$EXPECTED_FILENAME" ]]; then
+                    echo "   [AUTO-FIX]: Model wrote '$FILENAME' but spec requires '$EXPECTED_FILENAME'. Renaming."
+                    # Fix class name inside content to match expected filename
+                    CLASS_FROM_FILE="${FILENAME%.java}"
+                    CLASS_EXPECTED="${EXPECTED_FILENAME%.java}"
+                    CONTENT=$(echo "$CONTENT" | sed "s/class ${CLASS_FROM_FILE}/class ${CLASS_EXPECTED}/g")
+                    FILENAME="$EXPECTED_FILENAME"
+                fi
+
                 FORMATTED_CONTENT=$(python3 -c '
 import sys
 code = sys.stdin.read()
@@ -271,6 +281,12 @@ print(code.strip())
                     echo "   [AUTO-FIX]: Filename was null/empty. Auto-injecting '$EXPECTED_FILENAME' from spec."
                 fi
 
+                # Enforce spec filename
+                if [[ "$FILENAME" == *.java && "$FILENAME" != "$EXPECTED_FILENAME" ]]; then
+                    echo "   [AUTO-FIX]: Model tried to compile '$FILENAME' but spec requires '$EXPECTED_FILENAME'."
+                    FILENAME="$EXPECTED_FILENAME"
+                fi
+
                 echo "   [EXEC]: javac $FILENAME"
                 if COMPILE_ERR=$(timeout "$STEP_TIMEOUT" javac "$FILENAME" 2>&1); then
                     OUT="Compilation successful. You can now execute the compiled class using 'java'."
@@ -289,6 +305,12 @@ print(code.strip())
                 if [ -z "$CLASS_NAME" ] || [ "$CLASS_NAME" = "null" ]; then
                     CLASS_NAME="$CLASS_TOKEN"
                     echo "   [AUTO-FIX]: class_name was null/empty. Auto-injecting '$CLASS_TOKEN' from spec."
+                fi
+
+                # Enforce spec class name
+                if [ "$CLASS_NAME" != "$CLASS_TOKEN" ]; then
+                    echo "   [AUTO-FIX]: Model tried to run '$CLASS_NAME' but spec requires '$CLASS_TOKEN'."
+                    CLASS_NAME="$CLASS_TOKEN"
                 fi
 
                 echo "   [EXEC]: java $CLASS_NAME $RAW_ARGS"
