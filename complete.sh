@@ -249,10 +249,6 @@ print(json.dumps({"role": "tool", "content": content}))
                 # Enforce spec filename: if model wrote a .java file with wrong name, rename it
                 if [[ "$FILENAME" == *.java && "$FILENAME" != "$EXPECTED_FILENAME" ]]; then
                     echo "   [AUTO-FIX]: Model wrote '$FILENAME' but spec requires '$EXPECTED_FILENAME'. Renaming."
-                    # Fix class name inside content to match expected filename
-                    CLASS_FROM_FILE="${FILENAME%.java}"
-                    CLASS_EXPECTED="${EXPECTED_FILENAME%.java}"
-                    CONTENT=$(echo "$CONTENT" | sed "s/class ${CLASS_FROM_FILE}/class ${CLASS_EXPECTED}/g")
                     FILENAME="$EXPECTED_FILENAME"
                 fi
 
