@@ -21,6 +21,7 @@ echo "" >> "$RESULTS_FILE"
 MODELS=$(ollama list | grep -Ev 'NAME|embed|ocr' | sed -e 's/ .*//')
 
 TOTAL=0
+PASSED=0
 FAILED=0
 
 for i in $MODELS; do
@@ -32,13 +33,17 @@ for i in $MODELS; do
     sleep 1
 
     echo "[$TOTAL] Testing $i..."
-    timeout 600 bash ./complete.sh "$i" > "${filename}" 2>&1
+    timeout 600 bash ./complete.sh "$i" 2>&1 | tee "${filename}"
 
     VERDICT=$(grep "VERDICT" "${filename}" | tail -1)
     if echo "$VERDICT" | grep -q "FAIL"; then
         FAILED=$((FAILED + 1))
         echo "FAIL: $i" >> "$RESULTS_FILE"
         grep -E "VERDICT|Harness|Wall Clock|Spec requests" "${filename}" >> "$RESULTS_FILE" 2>/dev/null
+        echo "" >> "$RESULTS_FILE"
+    else
+        echo "PASS: $i" >> "$RESULTS_FILE"
+        grep -E "VERDICT|Harness|Wall Clock" "${filename}" >> "$RESULTS_FILE" 2>/dev/null
         echo "" >> "$RESULTS_FILE"
     fi
 
@@ -48,9 +53,10 @@ done
 
 echo ""
 echo "=== Done ==="
-echo "Total: $TOTAL | Failed: $FAILED"
-if [ -s "$RESULTS_FILE" ]; then
-    echo ""
-    echo "=== Errors ==="
-    cat "$RESULTS_FILE"
-fi
+echo "Total: $TOTAL | Passed: $PASSED | Failed: $FAILED"
+echo ""
+echo "=== Failures ==="
+grep "FAIL:" "$RESULTS_FILE" 2>/dev/null || echo "None"
+echo ""
+echo "=== Passes ==="
+grep "PASS:" "$RESULTS_FILE" 2>/dev/null || echo "None"
