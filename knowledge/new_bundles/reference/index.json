@@ -1,0 +1,17 @@
+{
+  "concepts": [
+    {
+      "id": "how-do-i-ralph",
+      "title": "How do I Ralph Wiggum as a \"software engineer\"",
+      "tags": [
+        "web-content",
+        "ghuntley.com",
+        "bash",
+        "ai",
+        "git"
+      ],
+      "status": "new",
+      "corpus": "web-content"
+    }
+  ]
+}

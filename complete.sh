@@ -31,6 +31,7 @@ fi
 
 MAX_STEPS=10
 STEP_TIMEOUT=120
+STEP_COUNT=0
 
 PROGRESS_FILE="sandbox/progress_tracker.py"
 
@@ -89,80 +90,8 @@ MESSAGES=$(jq -n \
     {role: "user", content: $spec}
   ]')
 
-TOOLS=$(jq -n \
-  --arg fn "$EXPECTED_FILENAME" \
-  --arg cn "$CLASS_TOKEN" \
-  '[
-    {
-      "type": "function",
-      "function": {
-        "name": "write_file",
-        "description": "Creates or overwrites a Java source file on disk. Use this first - before javac or java. Always provide both filename (ending in .java) and content (valid Java source code matching the filename).",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "filename": {
-              "type": "string",
-              "description": ("Target filename for the Java source file. Must end with .java. The spec requires " + $fn + " - use that exact value. Do not use paths like ./src/ - write to the current directory."),
-              "pattern": "^.+\\.java$",
-              "minLength": 1,
-              "examples": [$fn]
-            },
-            "content": {
-              "type": "string",
-              "description": ("Full Java source code to write. Must include a public class <ClassName> declaration where ClassName matches the filename (e.g. public class " + $cn + " for " + $fn + "). Use Java 17+ syntax. No external dependencies - standard library only.")
-            }
-          },
-          "required": ["filename", "content"]
-        }
-      }
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "javac",
-        "description": "Compiles a .java file that already exists on disk (created by a prior write_file call). The class file output will be in the same directory. Only proceed to java after this succeeds. If compilation fails, use write_file again to fix errors.",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "filename": {
-              "type": "string",
-              "description": ("Name of the .java file to compile. Must match a file you already created with write_file. The spec expects " + $fn + "."),
-              "pattern": "^.+\\.java$",
-              "minLength": 1,
-              "examples": [$fn]
-            }
-          },
-          "required": ["filename"]
-        }
-      }
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "java",
-        "description": "Runs a compiled Java class (must have called javac successfully first). Do not call this before javac completes without errors. The args array holds command-line arguments for the program main(String[]) method.",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "class_name": {
-              "type": "string",
-              "description": ("Name of the compiled class to run. Do not add .class extension. Must match the public class declaration in your .java file and equal the filename without extension. For " + $fn + ", use " + $cn + ". Do not include packages - the file has no package declaration."),
-              "minLength": 1,
-              "examples": [$cn]
-            },
-            "args": {
-              "type": "array",
-              "description": "Arguments passed to the Java main method. The spec expects an integer N as the first argument. Example: [\"11\"] for N=11, [\"1000\"] for N=1000, [\"-1\"] for the empty-stream test. Pass exactly one string per argument.",
-              "items": { "type": "string" },
-              "examples": [["11"], ["1000"], ["-1"]]
-            }
-          },
-          "required": ["class_name"]
-        }
-      }
-    }
-  ]')
+# Load tools from external JSON file (extensible — add new tools to tools.json)
+TOOLS=$(jq -c '.tools' tools.json 2>/dev/null || echo "[]")
 
 echo "--> Starting Ollama Agent Loop (Max Steps: $MAX_STEPS, Max Time per Step: ${STEP_TIMEOUT}s)..."
 LAST_RESPONSE=""
@@ -337,6 +266,69 @@ print(code.strip())
                     OUT="Program Output:\n$RUN_OUT"
                 fi
                 echo "   [PROGRAM OUTPUT]: $RUN_OUT"
+                ;;
+
+            "search_okf")
+                QUERY=$(echo "$TOOL_ARGS" | jq -r '.query // empty')
+                echo "   [OKF SEARCH]: $QUERY"
+                RESULT=""
+                for dir in "knowledge/trusted_bundles" "knowledge/new_bundles"; do
+                    if [ -d "$dir" ]; then
+                        FOUND=$(grep -r -i --include="*.md" "$QUERY" "$dir/" 2>/dev/null || true)
+                        if [ -n "$FOUND" ]; then
+                            RESULT="${RESULT}\n=== ${dir} ===\n${FOUND}\n"
+                        fi
+                    fi
+                done
+                OUT="OKF Search Results for '${QUERY}':\n${RESULT:-No results found.}"
+                ;;
+
+            "create_skill")
+                SKILL_NAME=$(echo "$TOOL_ARGS" | jq -r '.skill_name // empty')
+                DESC=$(echo "$TOOL_ARGS" | jq -r '.description // empty')
+                INPUT_EX=$(echo "$TOOL_ARGS" | jq -r '.example_input // "None provided"')
+                OUTPUT_EX=$(echo "$TOOL_ARGS" | jq -r '.example_output // "None provided"')
+
+                echo "   [CREATE SKILL]: $SKILL_NAME"
+                mkdir -p knowledge/new_bundles/skills
+
+                cat > "knowledge/new_bundles/skills/${SKILL_NAME}.md" << EOF
+---
+type: skill
+name: ${SKILL_NAME}
+status: new
+description: ${DESC}
+created_by: agent
+created_at: $(date +%Y-%m-%d)
+---
+
+## Description
+${DESC}
+
+## Examples
+- Input: ${INPUT_EX}
+- Output: ${OUTPUT_EX}
+EOF
+                OUT="Skill '${SKILL_NAME}' created in knowledge/new_bundles/skills/ (ready for review)"
+                ;;
+
+            "promote_skill")
+                SKILL_NAME=$(echo "$TOOL_ARGS" | jq -r '.skill_name // empty')
+                echo "   [PROMOTE SKILL]: $SKILL_NAME"
+
+                SRC="knowledge/new_bundles/skills/${SKILL_NAME}.md"
+                DST="knowledge/trusted_bundles/skills/${SKILL_NAME}.md"
+
+                if [ -f "$SRC" ]; then
+                    mkdir -p knowledge/trusted_bundles/skills
+                    mv "$SRC" "$DST"
+                    sed -i 's/status: new/status: trusted/' "$DST"
+                    OUT="Skill '${SKILL_NAME}' promoted to trusted_bundles/ ✓"
+                elif [ -f "$DST" ]; then
+                    OUT="Skill '${SKILL_NAME}' is already in trusted_bundles/"
+                else
+                    OUT="Skill '${SKILL_NAME}' not found in new_bundles/"
+                fi
                 ;;
 
             *)

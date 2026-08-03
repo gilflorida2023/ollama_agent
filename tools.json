@@ -1,0 +1,132 @@
+{
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "write_file",
+        "description": "Creates or overwrites a Java source file on disk. Use this FIRST — before javac or java. Always provide both filename (ending in .java) and content (valid Java source code matching the filename).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "filename": {
+              "type": "string",
+              "description": "Target filename for the Java source file. Must end with .java. Write to the current directory (no paths like ./src/).",
+              "pattern": "^.+\\.java$",
+              "minLength": 1
+            },
+            "content": {
+              "type": "string",
+              "description": "Full Java source code. Must include a public class declaration matching the filename (e.g. public class ClassName). Use Java 17+ syntax. No external dependencies — standard library only."
+            }
+          },
+          "required": ["filename", "content"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "javac",
+        "description": "Compiles a .java file that already exists on disk (created by a prior write_file call). Only proceed to java after this succeeds. If compilation fails, use write_file again to fix errors.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "filename": {
+              "type": "string",
+              "description": "Name of the .java file to compile. Must match a file you already created with write_file.",
+              "pattern": "^.+\\.java$",
+              "minLength": 1
+            }
+          },
+          "required": ["filename"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "java",
+        "description": "Runs a compiled Java class (must have called javac successfully first). Do not call this before javac completes without errors. The args array holds command-line arguments for the program main(String[]) method.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "class_name": {
+              "type": "string",
+              "description": "Name of the compiled class to run. Do not add .class extension. Must match the public class declaration in your .java file and equal the filename without extension.",
+              "minLength": 1
+            },
+            "args": {
+              "type": "array",
+              "description": "Arguments passed to the Java main method. Example: [\"11\"] for N=11, [\"1000\"] for N=1000.",
+              "items": { "type": "string" }
+            }
+          },
+          "required": ["class_name"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_okf",
+        "description": "Search the OKF knowledge bundle for skills, context, or examples. Searches trusted_bundles first (human-vetted), then new_bundles (agent-created). Use this BEFORE implementing new functionality to check if it already exists.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Search query — keywords to find in OKF skill/knowledge files (e.g. 'prime factors', 'date utility', 'bitcoin price')"
+            }
+          },
+          "required": ["query"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "create_skill",
+        "description": "Create a new skill definition in the OKF knowledge bundle. Writes to knowledge/new_bundles/skills/ for human review. Use this to document new capabilities before implementing them.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "skill_name": {
+              "type": "string",
+              "description": "Short identifier for the skill (e.g. 'prime_factors', 'get_date', 'bitcoin_price')"
+            },
+            "description": {
+              "type": "string",
+              "description": "What this skill does, its inputs, and expected outputs"
+            },
+            "example_input": {
+              "type": "string",
+              "description": "Example input for this skill (optional)"
+            },
+            "example_output": {
+              "type": "string",
+              "description": "Example output for this skill (optional)"
+            }
+          },
+          "required": ["skill_name", "description"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "promote_skill",
+        "description": "Promote a skill from new_bundles (unvetted) to trusted_bundles (human-approved). Use after user reviews and approves a skill.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "skill_name": {
+              "type": "string",
+              "description": "Name of the skill to promote (must exist in knowledge/new_bundles/skills/)"
+            }
+          },
+          "required": ["skill_name"]
+        }
+      }
+    }
+  ]
+}
