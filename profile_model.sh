@@ -3,7 +3,7 @@
 set +H
 set -e
 
-MODEL="${1:-qwen2.5-coder:7b}"
+MODEL="${1:-qwen3.5:9b-mlx}"
 OLLAMA_URL="http://localhost:11434/api/chat"
 
 SPEC_META=$(python3 "$(dirname "$0")/spec_parser.py" metadata)

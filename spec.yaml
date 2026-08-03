@@ -1,0 +1,53 @@
+project:
+  name: hashprime
+  file: hashprime.java
+  language: java 17+
+  dependencies: none
+
+input:
+  type: integer
+  description: "Single command-line argument N, accepts positive and negative integers"
+
+error_handling:
+  no_argument:
+    action: print_help_and_exit
+    exit_code: 0
+
+help_message: "Usage: java hashprime <N>\nComputes the SHA-256 hash of all primes \u2264 N (newline-terminated)."
+
+output:
+  format: sha256_hex
+  length: 64
+  encoding: lowercase hex
+
+byte_stream:
+  rule: "Generate primes p where 2 \u2264 p \u2264 N, for each convert to base-10 ASCII decimal string, append newline (0x0A) after every prime including the last one"
+  incremental: true
+  empty_stream:
+    condition: "N < 2"
+    hash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+validation:
+  - input: "-5"
+    expected: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  - input: "0"
+    expected: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  - input: "1"
+    expected: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  - input: "11"
+    expected: "563d8e0603dcc07d784135d99fd81ff6bf98495e898ec1f52e2e7605320cf6dc"
+  - input: "12"
+    expected: "563d8e0603dcc07d784135d99fd81ff6bf98495e898ec1f52e2e7605320cf6dc"
+  - input: "1000"
+    expected: "55542ac8f84d3c795ac05ea7dc3e382353c4bdd519d97e178d3f17a7f97fb25f"
+  - input: "1000000"
+    expected: "4883963dd4510a29d6df2ffe4dd11e4e1a910e815c7810b200c77b3357f22a28"
+  - input: "10000000"
+    expected: "36d6197802bc3b635b43b31cd6a2583f7cf8f5badff7992f3693c5102beefd14"
+
+constraints:
+  max_memory: "-Xmx512m"
+  target_n: 100000000
+  incremental_digest: true
+
+algorithm_reference: "prompt.hashprime.info"

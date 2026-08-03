@@ -1,0 +1,186 @@
+==========================================
+Starting Ralph Loop for: qwen2.5-coder:7b
+Branch: ralph_qwen2.5-coder_7b
+==========================================
+Already on 'ralph_qwen2.5-coder_7b'
+D	hashprime.class
+M	hashprime.java
+M	progress.txt
+M	prompt.hashprime.info
+Resumed existing branch: ralph_qwen2.5-coder_7b
+
+--------------------------------------------------
+Turn 1 of 10 (branch: ralph_qwen2.5-coder_7b) @ 2026-07-27 12:01:18
+--------------------------------------------------
+Task: empty_stream
+  N<2 (negative, 0, 1) produces empty-stream hash e3b0c44298fc1c14...
+
+--- Starting fresh worker session (up to 10 tool steps per session) ---
+  Spawning: ../complete.sh qwen2.5-coder:7b
+==========================================
+--> Preloading/Warming model into memory: qwen2.5-coder:7b...
+==========================================
+  Compiling hashprime.java...
+  Compilation FAILED after complete.sh run
+  -> Task empty_stream FAILED — rolling back
+HEAD is now at 9e1d3da ralph: turn 1 - input_validation passing
+  Rolled back to last good commit on ralph_qwen2.5-coder_7b
+  Turn 1 duration: 20s | Result: FAIL (rolled back) | Task: empty_stream
+
+--------------------------------------------------
+Turn 2 of 10 (branch: ralph_qwen2.5-coder_7b) @ 2026-07-27 12:01:38
+--------------------------------------------------
+Task: empty_stream
+  N<2 (negative, 0, 1) produces empty-stream hash e3b0c44298fc1c14...
+
+--- Starting fresh worker session (up to 10 tool steps per session) ---
+  Spawning: ../complete.sh qwen2.5-coder:7b
+==========================================
+--> Preloading/Warming model into memory: qwen2.5-coder:7b...
+==========================================
+  hashprime.java not found on disk
+  -> Task empty_stream FAILED — rolling back
+HEAD is now at 9e1d3da ralph: turn 1 - input_validation passing
+  Rolled back to last good commit on ralph_qwen2.5-coder_7b
+  Turn 2 duration: 1s | Result: FAIL (rolled back) | Task: empty_stream
+
+--------------------------------------------------
+Turn 3 of 10 (branch: ralph_qwen2.5-coder_7b) @ 2026-07-27 12:01:39
+--------------------------------------------------
+Task: empty_stream
+  N<2 (negative, 0, 1) produces empty-stream hash e3b0c44298fc1c14...
+
+--- Starting fresh worker session (up to 10 tool steps per session) ---
+  Spawning: ../complete.sh qwen2.5-coder:7b
+==========================================
+--> Preloading/Warming model into memory: qwen2.5-coder:7b...
+==========================================
+  hashprime.java not found on disk
+  -> Task empty_stream FAILED — rolling back
+HEAD is now at 9e1d3da ralph: turn 1 - input_validation passing
+  Rolled back to last good commit on ralph_qwen2.5-coder_7b
+  Turn 3 duration: 0s | Result: FAIL (rolled back) | Task: empty_stream
+
+--------------------------------------------------
+Turn 4 of 10 (branch: ralph_qwen2.5-coder_7b) @ 2026-07-27 12:01:39
+--------------------------------------------------
+Task: empty_stream
+  N<2 (negative, 0, 1) produces empty-stream hash e3b0c44298fc1c14...
+
+--- Starting fresh worker session (up to 10 tool steps per session) ---
+  Spawning: ../complete.sh qwen2.5-coder:7b
+==========================================
+--> Preloading/Warming model into memory: qwen2.5-coder:7b...
+==========================================
+  hashprime.java not found on disk
+  -> Task empty_stream FAILED — rolling back
+HEAD is now at 9e1d3da ralph: turn 1 - input_validation passing
+  Rolled back to last good commit on ralph_qwen2.5-coder_7b
+  Turn 4 duration: 0s | Result: FAIL (rolled back) | Task: empty_stream
+
+--------------------------------------------------
+Turn 5 of 10 (branch: ralph_qwen2.5-coder_7b) @ 2026-07-27 12:01:39
+--------------------------------------------------
+Task: empty_stream
+  N<2 (negative, 0, 1) produces empty-stream hash e3b0c44298fc1c14...
+
+--- Starting fresh worker session (up to 10 tool steps per session) ---
+  Spawning: ../complete.sh qwen2.5-coder:7b
+==========================================
+--> Preloading/Warming model into memory: qwen2.5-coder:7b...
+==========================================
+  hashprime.java not found on disk
+  -> Task empty_stream FAILED — rolling back
+HEAD is now at 9e1d3da ralph: turn 1 - input_validation passing
+  Rolled back to last good commit on ralph_qwen2.5-coder_7b
+  Turn 5 duration: 0s | Result: FAIL (rolled back) | Task: empty_stream
+
+--------------------------------------------------
+Turn 6 of 10 (branch: ralph_qwen2.5-coder_7b) @ 2026-07-27 12:01:39
+--------------------------------------------------
+Task: empty_stream
+  N<2 (negative, 0, 1) produces empty-stream hash e3b0c44298fc1c14...
+
+--- Starting fresh worker session (up to 10 tool steps per session) ---
+  Spawning: ../complete.sh qwen2.5-coder:7b
+==========================================
+--> Preloading/Warming model into memory: qwen2.5-coder:7b...
+==========================================
+  hashprime.java not found on disk
+  -> Task empty_stream FAILED — rolling back
+HEAD is now at 9e1d3da ralph: turn 1 - input_validation passing
+  Rolled back to last good commit on ralph_qwen2.5-coder_7b
+  Turn 6 duration: 0s | Result: FAIL (rolled back) | Task: empty_stream
+
+--------------------------------------------------
+Turn 7 of 10 (branch: ralph_qwen2.5-coder_7b) @ 2026-07-27 12:01:39
+--------------------------------------------------
+Task: empty_stream
+  N<2 (negative, 0, 1) produces empty-stream hash e3b0c44298fc1c14...
+
+--- Starting fresh worker session (up to 10 tool steps per session) ---
+  Spawning: ../complete.sh qwen2.5-coder:7b
+==========================================
+--> Preloading/Warming model into memory: qwen2.5-coder:7b...
+==========================================
+  hashprime.java not found on disk
+  -> Task empty_stream FAILED — rolling back
+HEAD is now at 9e1d3da ralph: turn 1 - input_validation passing
+  Rolled back to last good commit on ralph_qwen2.5-coder_7b
+  Turn 7 duration: 0s | Result: FAIL (rolled back) | Task: empty_stream
+
+--------------------------------------------------
+Turn 8 of 10 (branch: ralph_qwen2.5-coder_7b) @ 2026-07-27 12:01:39
+--------------------------------------------------
+Task: empty_stream
+  N<2 (negative, 0, 1) produces empty-stream hash e3b0c44298fc1c14...
+
+--- Starting fresh worker session (up to 10 tool steps per session) ---
+  Spawning: ../complete.sh qwen2.5-coder:7b
+==========================================
+--> Preloading/Warming model into memory: qwen2.5-coder:7b...
+==========================================
+  hashprime.java not found on disk
+  -> Task empty_stream FAILED — rolling back
+HEAD is now at 9e1d3da ralph: turn 1 - input_validation passing
+  Rolled back to last good commit on ralph_qwen2.5-coder_7b
+  Turn 8 duration: 0s | Result: FAIL (rolled back) | Task: empty_stream
+
+--------------------------------------------------
+Turn 9 of 10 (branch: ralph_qwen2.5-coder_7b) @ 2026-07-27 12:01:39
+--------------------------------------------------
+Task: empty_stream
+  N<2 (negative, 0, 1) produces empty-stream hash e3b0c44298fc1c14...
+
+--- Starting fresh worker session (up to 10 tool steps per session) ---
+  Spawning: ../complete.sh qwen2.5-coder:7b
+==========================================
+--> Preloading/Warming model into memory: qwen2.5-coder:7b...
+==========================================
+  hashprime.java not found on disk
+  -> Task empty_stream FAILED — rolling back
+HEAD is now at 9e1d3da ralph: turn 1 - input_validation passing
+  Rolled back to last good commit on ralph_qwen2.5-coder_7b
+  Turn 9 duration: 0s | Result: FAIL (rolled back) | Task: empty_stream
+
+--------------------------------------------------
+Turn 10 of 10 (branch: ralph_qwen2.5-coder_7b) @ 2026-07-27 12:01:39
+--------------------------------------------------
+Task: empty_stream
+  N<2 (negative, 0, 1) produces empty-stream hash e3b0c44298fc1c14...
+
+--- Starting fresh worker session (up to 10 tool steps per session) ---
+  Spawning: ../complete.sh qwen2.5-coder:7b
+==========================================
+--> Preloading/Warming model into memory: qwen2.5-coder:7b...
+==========================================
+  hashprime.java not found on disk
+  -> Task empty_stream FAILED — rolling back
+HEAD is now at 9e1d3da ralph: turn 1 - input_validation passing
+  Rolled back to last good commit on ralph_qwen2.5-coder_7b
+  Turn 10 duration: 0s | Result: FAIL (rolled back) | Task: empty_stream
+
+==========================================
+Reached MAX_TURNS (10) without completing all tasks.
+Unfinished tasks remain on branch ralph_qwen2.5-coder_7b.
+==========================================

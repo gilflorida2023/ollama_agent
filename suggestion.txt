@@ -1,0 +1,62 @@
+
+
+VALIDATION
+to enhance speed and accuracy, could we record and play-back the tool interactions to speed testing and ensure accuracy. i fear for these parsers, we dillute them for the sequences expected for many different models. we require specific parsers for specific models to be sure all interactions are captured and executed. 
+
+
+
+
+
+## TOOL_SUGGESTIONS
+# ls list diectory tool for the llm
+# validation tool - so if a model was able to create a file with the correct filename, it would compile , and report errors, or the validationn test results to both the user via stdout and the llm.. the llm shoulld then stop.
+
+GIT_WORKSPACE
+A git workspace directory that utilizes git may prevent stray writes into the project directory..  
+git could also be used to capture the different hashfile.java files  created for each after each iteration. git could also tell us if the file changed from iteration to iteration..so if the file never changed and the model persists in executing a non-existing file, we could terminate testing for that model.
+
+write tool could be integrated with git so as the model attempts to write,   the file is also committed to the git repo. 
+
+
+
+if the llm attempts to compile before the file exists , could the tool check if the file exists with git and if not suggest the java file be created first. in addition to the message from the compiler. With the new parser validation, many models fail this way.... 
+==========================================
+--> Running evaluation for model: qwen2.5-coder:14b
+==========================================
+--> Reading specification file...
+--> Starting Ollama Agent Loop (Max Steps: 10)...
+--> [ACTION DETECTED]: javac
+   [EXEC]: javac hashprime.java
+   [ERROR]: Compilation failed.
+--> [ACTION DETECTED]: java
+   [EXEC]: java hashprime 11
+   [PROGRAM OUTPUT]: Error: Compilation failed...
+
+Even as a model enhances the code within the sandbox, using a write, the git sandbox  shares a git diff between the previous file and the new file as a fast way to share changes within the file. the git diff will benefit both the user and the llm when attempting to understand success or failure.
+
+
+
+## USER REQUEST: 
+### user must see  the  compiler's errors  detailed to the screen. currently the user  does not see the real error and it make it harder to determine why some source failed without direct compilation by user.
+--> [ACTION DETECTED]: java
+   [EXEC]: java hashprime 11
+   [PROGRAM OUTPUT]: Error: Could not find or load main class hashprime
+
+
+Userquestions if the model is actualy reeivingfeeback prperly since some models continue to execute the same error over and  over, a git sancbox could preentt the endless lops by knowing, nothing has changed. and the curent code does not compile since there  is no class file and or other means. Caused by: java.lang.ClassNotFoundException: hashprime
+   [STEP COUNT]: 9 / 10
+--> [ACTION DETECTED]: javac
+   [EXEC]: javac hashprime.java
+   [ERROR]: Compilation failed.
+--> [ACTION DETECTED]: java
+   [EXEC]: java hashprime 11
+   [PROGRAM OUTPUT]: Error: Could not find or load main class hashprime
+Caused by: java.lang.ClassNotFoundException: hashprime
+--> [ACTION DETECTED]: java
+   [EXEC]: java hashprime 1000
+   [PROGRAM OUTPUT]: Error: Could not find or load main class hashprime
+Caused by: java.lang.ClassNotFoundException: hashprime
+   [STEP COUNT]: 10 / 10
+
+
+

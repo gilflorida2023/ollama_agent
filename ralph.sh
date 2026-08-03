@@ -3,7 +3,7 @@
 set +H
 set -e
 
-MODEL="${1:-qwen2.5-coder:7b}"
+MODEL="${1:-qwen3.5:9b-mlx}"
 MAX_TURNS="${2:-10}"
 SANDBOX_DIR="sandbox"
 SPEC_FILE="prompt.hashprime.info"

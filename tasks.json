@@ -1,0 +1,93 @@
+{
+  "filename": "hashprime.java",
+  "tasks": [
+    {
+      "id": "input_validation",
+      "description": "Handle no argument \u2014 print help message to stdout and exit 0",
+      "status": "failing",
+      "priority": 1,
+      "verification_command": "java hashprime 2>&1",
+      "expected_output": "Usage: java hashprime <N>"
+    },
+    {
+      "id": "empty_stream",
+      "description": "N<2 (negative, 0, 1) produces empty-stream hash e3b0c44298fc1c14...",
+      "status": "failing",
+      "priority": 2,
+      "verification_command": "java hashprime -5 2>&1",
+      "expected_output": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "id": "n_11",
+      "description": "N=11 produces 563d8e0603dcc07d...",
+      "status": "failing",
+      "priority": 3,
+      "verification_command": "java hashprime 11 2>&1",
+      "expected_output": "563d8e0603dcc07d784135d99fd81ff6bf98495e898ec1f52e2e7605320cf6dc"
+    },
+    {
+      "id": "n_1000",
+      "description": "N=1000 produces 55542ac8f84d3c79...",
+      "status": "failing",
+      "priority": 4,
+      "verification_command": "java hashprime 1000 2>&1",
+      "expected_output": "55542ac8f84d3c795ac05ea7dc3e382353c4bdd519d97e178d3f17a7f97fb25f"
+    },
+    {
+      "id": "n_1000000",
+      "description": "N=1000000 produces 4883963dd4510a29...",
+      "status": "failing",
+      "priority": 5,
+      "verification_command": "java hashprime 1000000 2>&1",
+      "expected_output": "4883963dd4510a29d6df2ffe4dd11e4e1a910e815c7810b200c77b3357f22a28"
+    },
+    {
+      "id": "n_10000000",
+      "description": "N=10000000 produces 36d6197802bc3b63...",
+      "status": "failing",
+      "priority": 6,
+      "verification_command": "java hashprime 10000000 2>&1",
+      "expected_output": "36d6197802bc3b635b43b31cd6a2583f7cf8f5badff7992f3693c5102beefd14"
+    },
+    {
+      "id": "memory_efficient",
+      "description": "Handle N=100,000,000 within -Xmx512m: incremental MessageDigest, BitSet sieve, no string concatenation",
+      "status": "failing",
+      "priority": 99,
+      "verification_command": "java -Xmx512m hashprime 100000000 2>&1 >/dev/null",
+      "expected_output": ""
+    }
+  ],
+  "regression_tests": [
+    {
+      "input": "-5",
+      "expected": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "tag": "empty_stream"
+    },
+    {
+      "input": "0",
+      "expected": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "tag": "empty_stream"
+    },
+    {
+      "input": "1",
+      "expected": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "tag": "empty_stream"
+    },
+    {
+      "input": "11",
+      "expected": "563d8e0603dcc07d784135d99fd81ff6bf98495e898ec1f52e2e7605320cf6dc",
+      "tag": "n_11"
+    },
+    {
+      "input": "12",
+      "expected": "563d8e0603dcc07d784135d99fd81ff6bf98495e898ec1f52e2e7605320cf6dc",
+      "tag": "n_11"
+    },
+    {
+      "input": "1000",
+      "expected": "55542ac8f84d3c795ac05ea7dc3e382353c4bdd519d97e178d3f17a7f97fb25f",
+      "tag": "n_1000"
+    }
+  ]
+}
