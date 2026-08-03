@@ -82,6 +82,40 @@ echo "--> Spec requests file: $EXPECTED_FILENAME"
 
 SYSTEM_PROMPT=$(sed "s/{{FILENAME}}/$EXPECTED_FILENAME/g; s/{{CLASS_TOKEN}}/$CLASS_TOKEN/g" prompts/system.txt)
 
+# Auto-context injection: search OKF for relevant knowledge
+if [ -d "knowledge" ]; then
+    # Extract meaningful keywords from spec (exclude common words)
+    KEYWORDS=$(echo "$SPEC_TEXT" | tr '[:upper:]' '[:lower:]' | tr -cs '[:alnum:]' '\n' | \
+        grep -E '^.{4,}$' | \
+        grep -v -E '^(this|that|with|from|have|been|will|your|file|class|code|test|run|make|use|the|and|for|not|are|but|can|may|its|our|has|how|all|any|one|do|no|so|if|to|in|it|of|or|we|by)$' | \
+        head -5 | tr '\n' ' ')
+    
+    if [ -n "$KEYWORDS" ]; then
+        OKF_CONTEXT=""
+        for keyword in $KEYWORDS; do
+            FOUND=$(grep -r -i --include="*.md" -l "$keyword" knowledge/trusted_bundles knowledge/new_bundles 2>/dev/null | head -3)
+            if [ -n "$FOUND" ]; then
+                for file in $FOUND; do
+                    # Extract relevant lines (not frontmatter)
+                    CONTENT=$(sed -n '/^##/,$p' "$file" 2>/dev/null | head -20)
+                    if [ -n "$CONTENT" ]; then
+                        OKF_CONTEXT="${OKF_CONTEXT}\n--- From: $(basename "$file") ---\n${CONTENT}\n"
+                    fi
+                done
+            fi
+        done
+        
+        if [ -n "$OKF_CONTEXT" ]; then
+            SYSTEM_PROMPT="${SYSTEM_PROMPT}
+
+=== RELEVANT OKF KNOWLEDGE ===
+The following knowledge may be relevant to your task:
+${OKF_CONTEXT}
+Apply these patterns to your implementation."
+        fi
+    fi
+fi
+
 MESSAGES=$(jq -n \
   --arg sys "$SYSTEM_PROMPT" \
   --arg spec "$SPEC_TEXT" \
@@ -329,6 +363,34 @@ EOF
                 else
                     OUT="Skill '${SKILL_NAME}' not found in new_bundles/"
                 fi
+                ;;
+
+            "view_concept")
+                CONCEPT_ID=$(echo "$TOOL_ARGS" | jq -r '.concept_id // empty')
+                echo "   [VIEW CONCEPT]: $CONCEPT_ID"
+                OUT=""
+                
+                # Search trusted_bundles first, then new_bundles
+                for dir in "knowledge/trusted_bundles/reference" "knowledge/new_bundles/reference"; do
+                    FILE="$dir/${CONCEPT_ID}.md"
+                    if [ -f "$FILE" ]; then
+                        OUT=$(cat "$FILE")
+                        break
+                    fi
+                done
+                
+                # Also check skills directory
+                if [ -z "$OUT" ]; then
+                    for dir in "knowledge/trusted_bundles/skills" "knowledge/new_bundles/skills"; do
+                        FILE="$dir/${CONCEPT_ID}.md"
+                        if [ -f "$FILE" ]; then
+                            OUT=$(cat "$FILE")
+                            break
+                        fi
+                    done
+                fi
+                
+                OUT="${OUT:-Concept not found: $CONCEPT_ID}"
                 ;;
 
             *)

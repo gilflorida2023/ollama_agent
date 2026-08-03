@@ -127,6 +127,23 @@
           "required": ["skill_name"]
         }
       }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "view_concept",
+        "description": "View the full content of an OKF concept. Use this to read detailed knowledge before implementing. Returns the complete markdown content with frontmatter.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "concept_id": {
+              "type": "string",
+              "description": "The concept ID to view (e.g. 'how-do-i-shell-commands', 'how-do-i-ralph'). Search first with search_okf to find concept IDs."
+            }
+          },
+          "required": ["concept_id"]
+        }
+      }
     }
   ]
 }
