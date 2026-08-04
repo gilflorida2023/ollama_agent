@@ -39,7 +39,40 @@
 
   e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 
-- java hashprme 11
+```bash
+# Verify the empty SHA-256 hash
+javac EmptySha256.java 
+java EmptySha256 
+# Expected output: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+
+# View the EmptySha256.java source
+cat EmptySha256.java 
+```
+
+```java
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+
+public class EmptySha256 {
+    public static void main(String[] args) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] digest = md.digest(new byte[0]); // empty input
+
+            StringBuilder sb = new StringBuilder();
+            for (byte b : digest) {
+                sb.append(String.format("%02x", b));
+            }
+            System.out.println(sb.toString());
+            // prints: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+        } catch (NoSuchAlgorithmException e) {
+            e.printStackTrace();
+        }
+    }
+}
+```
+
+Example: java hashprime 11
     - generates primes
     - 2\n3\n5\n7\n11\n => sent to message digest
   - expected 64-character hexadecimal SHA-256 digest: 563d8e0603dcc07d784135d99fd81ff6bf98495e898ec1f52e2e7605320cf6dc
