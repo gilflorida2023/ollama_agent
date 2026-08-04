@@ -3,6 +3,7 @@
 set +H
 set -e
 
+START_TIME=$(date +%s)
 MODEL="${1:-qwen3.5:9b-mlx}"
 SPEC_FILE="prompt.hashprime.info"
 OLLAMA_URL="http://localhost:11434/api/chat"
@@ -135,6 +136,19 @@ TOOLS=$(jq -c '.tools' tools.json 2>/dev/null || echo "[]")
 echo "--> Starting Ollama Agent Loop (Max Steps: $MAX_STEPS, Max Time per Step: ${STEP_TIMEOUT}s)..."
 LAST_RESPONSE=""
 MISSING_COUNT=0
+DEBUG_LOG="$PWD/logs/complete_debug.log"
+STEP_TIMEOUT_COUNT=0
+
+_log_debug() {
+    local ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    echo "[$ts] $*" >> "$DEBUG_LOG"
+}
+
+_probe_parser_stage() {
+    local stage
+    stage=$(echo "$RESPONSE" | python3 parser.py --probe 2>/dev/null | jq -r '.stage // "None"' 2>/dev/null)
+    echo "$stage"
+}
 
 while true; do
     PAYLOAD=$(jq -s --arg model "$MODEL" \
@@ -143,22 +157,33 @@ while true; do
 
     if ! RESPONSE=$(timeout "$STEP_TIMEOUT" curl -s "$OLLAMA_URL" -H "Content-Type: application/json" -d "$PAYLOAD"); then
         echo -e "\n=== Step timed out after ${STEP_TIMEOUT}s (curl). Terminating. ==="
+        _log_debug "step_timeout after ${STEP_TIMEOUT}s"
         break
     fi
     LAST_RESPONSE="$RESPONSE"
+
+    # Periodic re-probing every 3 steps to detect format shifts (log only, no config update)
+    if [ "$STEP_COUNT" -gt 0 ] && [ $((STEP_COUNT % 3)) -eq 0 ]; then
+        DETECTED_STAGE=$(_probe_parser_stage)
+        CONFIGURED_STAGE=$(python3 -c "import json; print(json.load(open('.configs/${SANITIZED_MODEL}.config.json')).get('stage'))" 2>/dev/null || echo "None")
+        if [ "$DETECTED_STAGE" != "None" ] && [ -n "$DETECTED_STAGE" ] && [ "$DETECTED_STAGE" != "$CONFIGURED_STAGE" ]; then
+            _log_debug "format_shift old_stage=$CONFIGURED_STAGE new_stage=$DETECTED_STAGE"
+        fi
+    fi
 
     TOOL_CALLS_ARRAY=$(
         case "$PARSER_FILE" in
             *.sh) RESULT=$(bash "$PARSER_FILE" <<< "$RESPONSE")
                   if [ "$(echo "$RESULT" | python3 -c "import sys,json; calls=json.load(sys.stdin); print(len(calls))" 2>/dev/null || echo 0)" -eq 0 ]; then
-                      python3 parser.py <<< "$RESPONSE"
+                      python3 parser.py --model "$(basename "$PARSER_FILE" .sh)" --fallback <<< "$RESPONSE"
                   else
                       echo "$RESULT"
                   fi ;;
-            *)    python3 "$PARSER_FILE" <<< "$RESPONSE" ;;
+            *)    python3 parser.py --model "$(basename "$PARSER_FILE" .sh)" --fallback <<< "$RESPONSE" ;;
         esac
     )
     NUM_CALLS=$(echo "$TOOL_CALLS_ARRAY" | jq 'length')
+    _log_debug "step=$STEP_COUNT calls=$NUM_CALLS"
 
     if [ "${NUM_CALLS:-0}" -eq 0 ]; then
         if [ "$MISSING_COUNT" -eq 0 ] && [ "$STEP_COUNT" -eq 0 ]; then
@@ -223,22 +248,52 @@ print(json.dumps({"role": "tool", "content": content}))
             continue
         fi
 
-        echo -e "\n=== Agent Finished Naturally ==="
-        echo "$RESPONSE" | jq -r '.message.content'
-        break
+        # Fallback: Save raw stream for user inspection
+        RAW_STREAM_FILE="logs/raw_stream_${STEP_COUNT}.log"
+        echo "$RESPONSE" > "$RAW_STREAM_FILE"
+        _log_debug "fallback_triggered step=$STEP_COUNT raw_file=$RAW_STREAM_FILE"
+
+        echo "⚠️  PARSER FALLBACK: All stages failed to extract tool calls."
+        echo "    Raw stream saved to: $RAW_STREAM_FILE"
+        echo ""
+        echo "=== RAW MODEL OUTPUT (first 2000 chars) ==="
+        echo "$CONTENT_PREVIEW"
+        echo "========================================"
+        echo ""
+        echo "⏭️  Skipping this turn..."
+
+        TOOL_RESPONSE_MSG=$(python3 -c '
+import sys, json
+print(json.dumps({"role": "tool", "content": "Skipped: no tool calls detected."}))
+')
+
+        ASSISTANT_MSG=$(echo "$RESPONSE" | jq '.message')
+        MESSAGES=$(jq -s '.[0] + [.[1]]' <(echo "$MESSAGES") <(echo "$ASSISTANT_MSG"))
+        MESSAGES=$(jq -s '.[0] + [.[1]]' <(echo "$MESSAGES") <(echo "$TOOL_RESPONSE_MSG"))
+
+        STEP_COUNT=$((STEP_COUNT + 1))
+        echo "   [STEP COUNT]: $STEP_COUNT / $MAX_STEPS"
+
+        if [ "$STEP_COUNT" -ge "$MAX_STEPS" ]; then
+            echo -e "\n=== Maximum Steps ($MAX_STEPS) Reached for Model $MODEL. Terminating. ==="
+            break
+        fi
+        MISSING_COUNT=0
+        continue
     fi
     MISSING_COUNT=0
 
     ASSISTANT_MSG=$(echo "$RESPONSE" | jq '.message')
     MESSAGES=$(jq -s '.[0] + [.[1]]' <(echo "$MESSAGES") <(echo "$ASSISTANT_MSG"))
 
-    COMBINED_OUTPUT=""
+     COMBINED_OUTPUT=""
 
     for (( i=0; i<$NUM_CALLS; i++ )); do
         CALL=$(echo "$TOOL_CALLS_ARRAY" | jq ".[$i]")
         TOOL_NAME=$(echo "$CALL" | jq -r '.name')
         TOOL_ARGS=$(echo "$CALL" | jq '.arguments')
 
+        _log_debug "exec step=$STEP_COUNT call=$i tool=$TOOL_NAME"
         echo "--> [ACTION DETECTED]: $TOOL_NAME"
 
         case "$TOOL_NAME" in
@@ -262,11 +317,46 @@ print(json.dumps({"role": "tool", "content": content}))
                 fi
 
                 FORMATTED_CONTENT=$(python3 -c '
-import sys
-code = sys.stdin.read()
-if "\\n" in code and "\n" not in code:
-    code = code.encode().decode("unicode_escape")
-print(code.strip())
+import sys, re, codecs
+
+raw = sys.stdin.read()
+
+# Step 1: Decode JSON string escapes (single pass, correct order)
+# Use codecs for unicode_escape handling
+decoded = raw
+
+# Handle double-escaped sequences first (from nested JSON)
+decoded = decoded.replace("\\\\\\n", "\n")
+decoded = decoded.replace("\\\\\\t", "\t")
+decoded = decoded.replace("\\\\\\r", "\r")
+decoded = decoded.replace("\\\\\"", "\"")
+decoded = decoded.replace("\\\\\\\\", "\\\\")
+decoded = decoded.replace("\\\\/", "/")
+decoded = decoded.replace("\\\\b", "\b")
+decoded = decoded.replace("\\\\f", "\f")
+
+# Handle single-escaped sequences
+decoded = decoded.replace("\\n", "\n")
+decoded = decoded.replace("\\t", "\t")
+decoded = decoded.replace("\\r", "\r")
+decoded = decoded.replace("\\\"", "\"")
+decoded = decoded.replace("\\\\", "\\")
+decoded = decoded.replace("\\/", "/")
+decoded = decoded.replace("\\b", "\b")
+decoded = decoded.replace("\\f", "\f")
+
+# Handle unicode escapes
+decoded = re.sub(r"\\u([0-9a-fA-F]{4})", lambda m: chr(int(m.group(1), 16)), decoded)
+
+# Step 2: Strip trailing markdown fences and parser artifacts
+# Remove trailing ``` and everything after the last valid closing brace
+decoded = re.sub(r"\}\s*\"?\s*\}?\s*\}?\s*`{3,}\s*$", "}", decoded, flags=re.DOTALL)
+decoded = re.sub(r"\}\s*\"?\s*\}?\s*$", "}", decoded, flags=re.DOTALL)
+
+# Remove any leading/trailing whitespace
+decoded = decoded.strip()
+
+print(decoded)
 ' <<< "$CONTENT")
 
                 echo "   [EXEC]: Writing file '$FILENAME'..."
@@ -520,9 +610,10 @@ else
 fi
 
 echo ""
-echo "    AUTOMATED HARNESS VERDICT — $MODEL $( [ $HARNESS_EXIT -eq 0 ] && echo 'PASS' || echo 'FAIL' )"
+    echo "    AUTOMATED HARNESS VERDICT — $MODEL $( [ $HARNESS_EXIT -eq 0 ] && echo 'PASS' || echo 'FAIL' )"
+    echo "MODEL_RESULT: $( [ $HARNESS_EXIT -eq 0 ] && echo 'PASS' || echo 'FAIL' )"
 
-END_TIME=$(date +%s)
+    END_TIME=$(date +%s)
 TOTAL_WALL_TIME=$((END_TIME - START_TIME))
 
 if [ -n "$LAST_RESPONSE" ]; then

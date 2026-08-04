@@ -6,46 +6,54 @@
 - **File**: `hashprime.java`
 - **Language**: Java 17+
 
+## Compilation
+- javac hashprime.java 
+
 ## Execution
-Command: `java hashprime <N>`
+- Command: `java hashprime <N>`
+- Only accepts one numeric parameter
+- The public class must be named `hashprime` exactly. `main` may `throws Exception`.
 
-Must be a single `.java` file that compiles and runs with no external jars.
-
-## Input
-- Single command-line argument: 
+## Input Parameter
+- Single command-line argument: an `int` N (32-bit signed integer).
 - Accepts both positive and negative integers.
 
 ## Error Handling
 - If **no argument** is provided:
   - Print the application help message to stdout.
+      Usage: java hashprime <N>
+      Computes the SHA-256 hash of all primes ≤ N .
   - Exit gracefully with code `0`.
-- Help message example:
-
-  Usage: java hashprime <N>
-  Computes the SHA-256 hash of all primes ≤ N (newline-terminated).
-
 ## Output
-- Print **ONLY** the 64-character lowercase hexadecimal SHA-256 digest.
-- No extra text, no newlines, no logs, no timestamps.
+- Print **ONLY** the 64-character hexadecimal SHA-256 digest.
+- A trailing newline after the digest is acceptable.
 
 ## Byte Stream to Hash
 - Generate all prime numbers `p` where `2 ≤ p ≤ N`.
+- Use the Sieve of Eratosthenes with a `java.util.BitSet` for efficiency.
 - For each prime, convert to its base-10 ASCII decimal string (no leading zeros).
 - Append a single newline character `'\n'` (0x0A) after every prime, **including the last one**.
-- For `N < 2` (including negative numbers), the byte stream must be empty.  
-Expected hash for empty stream:
+- For `N < 2` (including negative numbers), the byte stream must be empty.
+  Do NOT use `Math.abs(N)` — negative N means no primes to hash.
+  Expected hash for empty stream:
 
   e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 
+- java hashprme 11
+    - generates primes
+    - 2\n3\n5\n7\n11\n => sent to message digest
+  - expected 64-character hexadecimal SHA-256 digest: 563d8e0603dcc07d784135d99fd81ff6bf98495e898ec1f52e2e7605320cf6dc
+
+
+
 ## Performance & Memory Constraints
 - Target: `N = 100,000,000`
-- Must run comfortably within standard JVM memory (`-Xmx512m` or default).
 - Update `MessageDigest` incrementally — **do not** load all primes into one string or byte array.
 
 ## Validation Tests
 
-| Input       | Expected Output                                              |
-|-------------|--------------------------------------------------------------|
+| Input       | Expected Output                                                    |
+|-------------|--------------------------------------------------------------------|
 | `-5`        | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` |
 | `0`         | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` |
 | `1`         | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` |

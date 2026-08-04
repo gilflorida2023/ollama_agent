@@ -2,4 +2,8 @@
 *.java
 logs/
 sandbox/
+.configs/
+__pycache__/
+knowledge/
+
 

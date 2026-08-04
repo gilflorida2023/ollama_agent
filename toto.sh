@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
 
-clear
-
 cleanup_children() {
     pkill -f "java hashprime" 2>/dev/null || true
     pkill -f "javac hashprime" 2>/dev/null || true
@@ -54,16 +52,16 @@ for i in $MODELS; do
     # Run complete.sh
     timeout 600 bash ./complete.sh "$i" 2>&1 |     tee  "${filename}" | tee -a logs/toto.logs
 
-    VERDICT=$(grep "VERDICT" "${filename}" | tail -1)
-    if echo "$VERDICT" | grep -q "FAIL"; then
-        FAILED=$((FAILED + 1))
-        echo "FAIL: $i" >> "$RESULTS_FILE"
-        grep -E "VERDICT|Harness|Wall Clock|Spec requests|AUTO-FIX|EXEC" "${filename}" >> "$RESULTS_FILE" 2>/dev/null
-        echo "" >> "$RESULTS_FILE"
-    else
+    MODEL_RESULT=$(grep "^MODEL_RESULT:" "${filename}" | tail -1 | awk '{print $2}')
+    if [ "$MODEL_RESULT" = "PASS" ]; then
         PASSED=$((PASSED + 1))
         echo "PASS: $i" >> "$RESULTS_FILE"
         grep -E "VERDICT|Harness|Wall Clock" "${filename}" >> "$RESULTS_FILE" 2>/dev/null
+        echo "" >> "$RESULTS_FILE"
+    else
+        FAILED=$((FAILED + 1))
+        echo "FAIL: $i" >> "$RESULTS_FILE"
+        grep -E "VERDICT|Harness|Wall Clock|Spec requests|AUTO-FIX|EXEC" "${filename}" >> "$RESULTS_FILE" 2>/dev/null
         echo "" >> "$RESULTS_FILE"
     fi
 

@@ -4,8 +4,20 @@ import json
 import re
 import os
 import argparse
+from datetime import datetime, timezone
 
 BT = '\x60'
+
+DEBUG_LOG_PATH = os.path.join(os.path.dirname(__file__), 'logs', 'parser_debug.log')
+
+def _debug_log(message):
+    try:
+        os.makedirs(os.path.join(os.path.dirname(__file__), 'logs'), exist_ok=True)
+        ts = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        with open(DEBUG_LOG_PATH, 'a') as f:
+            f.write(f'[{ts}] {message}\n')
+    except Exception:
+        pass
 
 REGEX_THINK = re.compile(r'<think>.*?</think>', re.DOTALL)
 REGEX_MARKDOWN_JSON = re.compile(
@@ -104,9 +116,16 @@ def parse_response(data, skip=None):
                 "arguments": func.get("arguments")
             })
         if tool_calls:
+            stage = 1
+            for tc in tool_calls:
+                args_str = json.dumps(tc["arguments"])[:200]
+                _debug_log(f'stage={stage} calls=1 tool={tc["name"]} args={args_str}')
             return tool_calls
 
     raw_content = msg.get("content") or ""
+    if not raw_content or not raw_content.strip():
+        _debug_log('stage=NONE calls=0 content_preview=[EMPTY]')
+        return tool_calls
 
     if 2 not in skip:
         content = re.sub(REGEX_THINK, '', raw_content)
@@ -125,6 +144,10 @@ def parse_response(data, skip=None):
             except Exception:
                 pass
         if tool_calls:
+            stage = 3
+            for tc in tool_calls:
+                args_str = json.dumps(tc["arguments"])[:200]
+                _debug_log(f'stage={stage} calls=1 tool={tc["name"]} args={args_str}')
             return tool_calls
 
     if 4 not in skip:
@@ -143,6 +166,10 @@ def parse_response(data, skip=None):
             except Exception:
                 pos = match_idx + 1
         if tool_calls:
+            stage = 4
+            for tc in tool_calls:
+                args_str = json.dumps(tc["arguments"])[:200]
+                _debug_log(f'stage={stage} calls=1 tool={tc["name"]} args={args_str}')
             return tool_calls
 
     if 5 not in skip:
@@ -166,6 +193,10 @@ def parse_response(data, skip=None):
                 "arguments": {"class_name": cn, "args": args_list}
             })
         if tool_calls:
+            stage = 5
+            for tc in tool_calls:
+                args_str = json.dumps(tc["arguments"])[:200]
+                _debug_log(f'stage={stage} calls={len(tool_calls)} tool={tc["name"]} args={args_str}')
             return tool_calls
 
     if 6 not in skip:
@@ -217,6 +248,14 @@ def parse_response(data, skip=None):
                                 "arguments": {"class_name": class_name, "args": cmd_args}
                             })
 
+    if tool_calls:
+        for tc in tool_calls:
+            args_str = json.dumps(tc["arguments"])[:200]
+            _debug_log(f'stage=detected calls={len(tool_calls)} tool={tc["name"]} args={args_str}')
+    else:
+        content_preview = raw_content[:500] if isinstance(raw_content, str) else str(raw_content)[:500]
+        _debug_log(f'stage=NONE calls=0 content_preview={content_preview}')
+
     return tool_calls
 
 
@@ -224,6 +263,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument('--model', help='Model name to load config from .configs/')
     ap.add_argument('--probe', action='store_true', help='Detect parser stage and exit')
+    ap.add_argument('--fallback', action='store_true', help='Fallback to all stages if configured stage fails')
     args = ap.parse_args()
 
     if args.probe:
@@ -237,20 +277,40 @@ if __name__ == "__main__":
         sys.exit(0)
 
     skip = set()
+    configured_stage = None
     if args.model:
         config_dir = os.path.join(os.path.dirname(__file__), '.configs')
         config_path = os.path.join(config_dir, f'{args.model}.config.json')
         if os.path.exists(config_path):
             with open(config_path) as f:
                 config = json.load(f)
-                stage = config.get("stage")
-                if stage is not None:
-                    skip = set(range(1, 9)) - {stage}
+                configured_stage = config.get("stage")
+                if configured_stage is not None:
+                    skip = set(range(1, 9)) - {configured_stage}
 
     try:
         raw_input = sys.stdin.read()
         data = json.loads(raw_input)
-        result = parse_response(data, skip)
-        print(json.dumps(result))
+
+        if args.fallback:
+            if configured_stage is not None:
+                # First try configured stage
+                result = parse_response(data, skip)
+                if result:
+                    print(json.dumps(result))
+                    sys.exit(0)
+                _debug_log(f'CONFIGURED STAGE {configured_stage} FAILED, trying all stages')
+            # Fallback: try all stages, prioritizing common ones
+            for stage in [1, 3, 4, 5, 6, 7, 8]:
+                result = parse_response(data, skip=set(range(1, 9)) - {stage})
+                if result:
+                    print(json.dumps(result))
+                    sys.exit(0)
+            _debug_log('ALL STAGES FAILED')
+            print("[]")
+        else:
+            result = parse_response(data, skip)
+            print(json.dumps(result))
     except Exception:
+        _debug_log('EXCEPTION in main: parse failure')
         print("[]")
