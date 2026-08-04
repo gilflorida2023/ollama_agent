@@ -12,14 +12,22 @@ CONFIG_DIR=".configs"
 SANITIZED_MODEL=$(echo "$MODEL" | sed 's/[/:]/_/g')
 PARSER_FILE="parser.py"
 if [ -f "$CONFIG_DIR/${SANITIZED_MODEL}.sh" ]; then
-    # Check if model ID is present and matches current
-    CURRENT_ID=$(ollama list 2>/dev/null | awk -v m="$MODEL" '$1==m {print $2}' || echo "")
-    STORED_ID=$(python3 -c "import json; print(json.load(open('$CONFIG_DIR/${SANITIZED_MODEL}.config.json')).get('model_id', ''))" 2>/dev/null || echo "")
-    if [ -z "$STORED_ID" ] || [ "$CURRENT_ID" != "$STORED_ID" ]; then
-        REASON=$( [ -z "$STORED_ID" ] && echo "no model_id in config" || echo "ID changed ($STORED_ID → $CURRENT_ID)" )
-        echo "⚠️  Re-profiling: $REASON"
-        rm -f "$CONFIG_DIR/${SANITIZED_MODEL}.sh" "$CONFIG_DIR/${SANITIZED_MODEL}.config.json"
+    # Check if validation failed and re-profile
+    VALIDATION_STATUS=$(python3 -c "import json; print(json.load(open('$CONFIG_DIR/${SANITIZED_MODEL}.config.json')).get('validation_status', 'unknown'))" 2>/dev/null || echo "unknown")
+    if [ "$VALIDATION_STATUS" = "failed" ]; then
+        echo "⚠️  Re-profiling: previous validation failed"
+        rm -f "$CONFIG_DIR/${SANITIZED_MODEL}.sh" "$CONFIG_DIR/${SANITIZED_MODEL}.config.json" "$CONFIG_DIR/${SANITIZED_MODEL}_pm_"*.raw.json
         bash ./profile_model.sh "$MODEL"
+    else
+        # Check if model ID is present and matches current
+        CURRENT_ID=$(ollama list 2>/dev/null | awk -v m="$MODEL" '$1==m {print $2}' || echo "")
+        STORED_ID=$(python3 -c "import json; print(json.load(open('$CONFIG_DIR/${SANITIZED_MODEL}.config.json')).get('model_id', ''))" 2>/dev/null || echo "")
+        if [ -z "$STORED_ID" ] || [ "$CURRENT_ID" != "$STORED_ID" ]; then
+            REASON=$( [ -z "$STORED_ID" ] && echo "no model_id in config" || echo "ID changed ($STORED_ID → $CURRENT_ID)" )
+            echo "⚠️  Re-profiling: $REASON"
+            rm -f "$CONFIG_DIR/${SANITIZED_MODEL}.sh" "$CONFIG_DIR/${SANITIZED_MODEL}.config.json" "$CONFIG_DIR/${SANITIZED_MODEL}_pm_"*.raw.json
+            bash ./profile_model.sh "$MODEL"
+        fi
     fi
     PARSER_FILE="$CONFIG_DIR/${SANITIZED_MODEL}.sh"
 elif [ -f "$CONFIG_DIR/${SANITIZED_MODEL}.py" ]; then
@@ -317,43 +325,20 @@ print(json.dumps({"role": "tool", "content": "Skipped: no tool calls detected."}
                 fi
 
                 FORMATTED_CONTENT=$(python3 -c '
-import sys, re, codecs
+import sys, re
 
 raw = sys.stdin.read()
-
-# Step 1: Decode JSON string escapes (single pass, correct order)
-# Use codecs for unicode_escape handling
 decoded = raw
 
-# Handle double-escaped sequences first (from nested JSON)
-decoded = decoded.replace("\\\\\\n", "\n")
-decoded = decoded.replace("\\\\\\t", "\t")
-decoded = decoded.replace("\\\\\\r", "\r")
-decoded = decoded.replace("\\\\\"", "\"")
-decoded = decoded.replace("\\\\\\\\", "\\\\")
-decoded = decoded.replace("\\\\/", "/")
-decoded = decoded.replace("\\\\b", "\b")
-decoded = decoded.replace("\\\\f", "\f")
-
-# Handle single-escaped sequences
-decoded = decoded.replace("\\n", "\n")
-decoded = decoded.replace("\\t", "\t")
-decoded = decoded.replace("\\r", "\r")
-decoded = decoded.replace("\\\"", "\"")
-decoded = decoded.replace("\\\\", "\\")
-decoded = decoded.replace("\\/", "/")
-decoded = decoded.replace("\\b", "\b")
-decoded = decoded.replace("\\f", "\f")
-
-# Handle unicode escapes
+# Handle unicode escapes (e.g., \u0022 -> ")
 decoded = re.sub(r"\\u([0-9a-fA-F]{4})", lambda m: chr(int(m.group(1), 16)), decoded)
 
-# Step 2: Strip trailing markdown fences and parser artifacts
-# Remove trailing ``` and everything after the last valid closing brace
-decoded = re.sub(r"\}\s*\"?\s*\}?\s*\}?\s*`{3,}\s*$", "}", decoded, flags=re.DOTALL)
-decoded = re.sub(r"\}\s*\"?\s*\}?\s*$", "}", decoded, flags=re.DOTALL)
+# Only strip trailing artifacts that contain quotes or backticks (parser junk)
+# Do NOT strip bare closing braces - those are legitimate Java code
+decoded = re.sub(r"\}\s*\"\s*\}\s*\}\s*`{3,}\s*$", "}", decoded, flags=re.DOTALL)
+decoded = re.sub(r"\}\s*\"\s*\}\s*`{3,}\s*$", "}", decoded, flags=re.DOTALL)
+decoded = re.sub(r"`{3,}\s*$", "", decoded, flags=re.DOTALL)
 
-# Remove any leading/trailing whitespace
 decoded = decoded.strip()
 
 print(decoded)
