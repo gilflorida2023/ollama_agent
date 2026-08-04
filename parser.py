@@ -101,7 +101,7 @@ def _probe(data):
     return None
 
 
-def parse_response(data, skip=None):
+def parse_response(data, skip=None, context=None):
     if skip is None:
         skip = set()
     tool_calls = []
@@ -200,34 +200,41 @@ def parse_response(data, skip=None):
             return tool_calls
 
     if 6 not in skip:
-        java_matches = re.findall(REGEX_MARKDOWN_JAVA, content)
-        if java_matches:
-            match = java_matches[-1]
-            fname, code_body, class_name = match if len(match) == 3 else (None, match[0], match[1])
-            filename = fname if fname else class_name + ".java"
-            tool_calls.append({
-                "name": "write_file",
-                "arguments": {
-                    "filename": filename,
-                    "content": code_body.strip()
-                }
-            })
+        # If context is compile or run, don't wrap Java code as write_file
+        # The model is ignoring tools and writing code instead - skip it
+        if context not in ('compile', 'run'):
+            java_matches = re.findall(REGEX_MARKDOWN_JAVA, content)
+            if java_matches:
+                match = java_matches[-1]
+                fname, code_body, class_name = match if len(match) == 3 else (None, match[0], match[1])
+                filename = fname if fname else class_name + ".java"
+                tool_calls.append({
+                    "name": "write_file",
+                    "arguments": {
+                        "filename": filename,
+                        "content": code_body.strip()
+                    }
+                })
 
     if 7 not in skip and not tool_calls:
-        java_match = re.search(REGEX_UNFENCED_JAVA, content)
-        if java_match:
-            code_body = java_match.group(1)
-            class_name = java_match.group(2)
-            tool_calls.append({
-                "name": "write_file",
-                "arguments": {
-                    "filename": class_name + ".java",
-                    "content": code_body.strip()
-                }
-            })
+        # If context is compile or run, don't wrap Java code as write_file
+        if context not in ('compile', 'run'):
+            java_match = re.search(REGEX_UNFENCED_JAVA, content)
+            if java_match:
+                code_body = java_match.group(1)
+                class_name = java_match.group(2)
+                tool_calls.append({
+                    "name": "write_file",
+                    "arguments": {
+                        "filename": class_name + ".java",
+                        "content": code_body.strip()
+                    }
+                })
 
     if 8 not in skip:
-        if not tool_calls or all(tc["name"] == "write_file" for tc in tool_calls):
+        # If context is compile or run, always try to extract shell commands
+        # This handles Format C models that write javac/java in bash blocks
+        if context in ('compile', 'run') or not tool_calls or all(tc["name"] == "write_file" for tc in tool_calls):
             for block in re.findall(REGEX_SHELL_COMMANDS, content):
                 for line in block.splitlines():
                     line = line.strip()
@@ -264,6 +271,7 @@ if __name__ == "__main__":
     ap.add_argument('--model', help='Model name to load config from .configs/')
     ap.add_argument('--probe', action='store_true', help='Detect parser stage and exit')
     ap.add_argument('--fallback', action='store_true', help='Fallback to all stages if configured stage fails')
+    ap.add_argument('--context', help='Current step context (create/compile/run) for Format C models')
     args = ap.parse_args()
 
     if args.probe:
@@ -295,21 +303,23 @@ if __name__ == "__main__":
         if args.fallback:
             if configured_stage is not None:
                 # First try configured stage
-                result = parse_response(data, skip)
+                result = parse_response(data, skip, context=args.context)
                 if result:
                     print(json.dumps(result))
                     sys.exit(0)
                 _debug_log(f'CONFIGURED STAGE {configured_stage} FAILED, trying all stages')
             # Fallback: try all stages, prioritizing common ones
-            for stage in [1, 3, 4, 5, 6, 7, 8]:
-                result = parse_response(data, skip=set(range(1, 9)) - {stage})
+            # Skip stages 6 and 7 when context is compile/run (model ignoring tools)
+            stages_to_try = [1, 3, 4, 5, 8] if args.context in ('compile', 'run') else [1, 3, 4, 5, 6, 7, 8]
+            for stage in stages_to_try:
+                result = parse_response(data, skip=set(range(1, 9)) - {stage}, context=args.context)
                 if result:
                     print(json.dumps(result))
                     sys.exit(0)
             _debug_log('ALL STAGES FAILED')
             print("[]")
         else:
-            result = parse_response(data, skip)
+            result = parse_response(data, skip, context=args.context)
             print(json.dumps(result))
     except Exception:
         _debug_log('EXCEPTION in main: parse failure')

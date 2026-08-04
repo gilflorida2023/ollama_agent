@@ -158,6 +158,7 @@ LAST_RESPONSE=""
 MISSING_COUNT=0
 DEBUG_LOG="$PWD/logs/complete_debug.log"
 STEP_TIMEOUT_COUNT=0
+LAST_TOOL=""  # Track last tool executed for context detection
 
 _log_debug() {
     local ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -168,6 +169,15 @@ _probe_parser_stage() {
     local stage
     stage=$(echo "$RESPONSE" | python3 parser.py --probe 2>/dev/null | jq -r '.stage // "None"' 2>/dev/null)
     echo "$stage"
+}
+
+# Determine context from last tool executed
+_get_context() {
+    case "$LAST_TOOL" in
+        write_file) echo "compile" ;;
+        javac) echo "run" ;;
+        *) echo "create" ;;
+    esac
 }
 
 while true; do
@@ -191,15 +201,18 @@ while true; do
         fi
     fi
 
+    # Get context for Format C models (determines how to interpret markdown code blocks)
+    CONTEXT=$(_get_context)
+
     TOOL_CALLS_ARRAY=$(
         case "$PARSER_FILE" in
             *.sh) RESULT=$(bash "$PARSER_FILE" <<< "$RESPONSE")
                   if [ "$(echo "$RESULT" | python3 -c "import sys,json; calls=json.load(sys.stdin); print(len(calls))" 2>/dev/null || echo 0)" -eq 0 ]; then
-                      python3 parser.py --model "$(basename "$PARSER_FILE" .sh)" --fallback <<< "$RESPONSE"
+                      python3 parser.py --model "$(basename "$PARSER_FILE" .sh)" --fallback --context "$CONTEXT" <<< "$RESPONSE"
                   else
                       echo "$RESULT"
                   fi ;;
-            *)    python3 parser.py --model "$(basename "$PARSER_FILE" .sh)" --fallback <<< "$RESPONSE" ;;
+            *)    python3 parser.py --model "$(basename "$PARSER_FILE" .sh)" --fallback --context "$CONTEXT" <<< "$RESPONSE" ;;
         esac
     )
     NUM_CALLS=$(echo "$TOOL_CALLS_ARRAY" | jq 'length')
@@ -516,6 +529,9 @@ EOF
                 OUT="Unknown tool name: $TOOL_NAME"
                 ;;
         esac
+
+        # Track last tool for context detection
+        LAST_TOOL="$TOOL_NAME"
 
         COMBINED_OUTPUT=$(printf "%s\n%s" "$COMBINED_OUTPUT" "$OUT")
     done

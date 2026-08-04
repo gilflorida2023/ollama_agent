@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
 
+# The key insight: we don't need to change the model, we need to adapt to it.
+# Models use 3 different response formats:
+#   Format A: Native tool_calls (gemma4, qwen3.5 mlx)
+#   Format B: JSON in content (qwen2.5-coder)
+#   Format C: Markdown code blocks (qwen3.5:9b-mlx)
+# We detect the format during profiling and adapt parsing accordingly.
+
 set +H
 
 MODEL="${1:-qwen3.5:9b-mlx}"
@@ -96,19 +103,22 @@ TOOLS=$(cat << 'TOOLS_EOF'
 TOOLS_EOF
 )
 
-# Helper: send prompt and record response
-send_prompt() {
+# Helper: send messages and record response
+send_messages() {
     local step_name="$1"
-    local prompt_text="$2"
+    local messages="$2"
     local raw_file="$CONFIG_DIR/${SANITIZED_MODEL}_pm_${step_name}.raw.json"
 
-    local messages=$(jq -n \
-      --arg user "$prompt_text" \
-      '[{role: "user", content: $user}]')
+    # Write to temp files for jq slurpfile (more reliable than process substitution)
+    local tmp_messages="/tmp/profile_messages.json"
+    local tmp_tools="/tmp/profile_tools.json"
+    echo "$messages" > "$tmp_messages"
+    echo "$TOOLS" > "$tmp_tools"
 
-    local payload=$(jq -s --arg model "$MODEL" \
-      '{model: $model, messages: .[0], tools: .[1], stream: false, temperature: 0, think: false}' \
-      <(echo "$messages") <(echo "$TOOLS"))
+    local payload=$(jq -s -n --arg model "$MODEL" \
+      --slurpfile m "$tmp_messages" \
+      --slurpfile t "$tmp_tools" \
+      '{model: $model, messages: $m[0], tools: $t[0], stream: false, temperature: 0, think: false}')
 
     local response=$(timeout 120 curl -s "$OLLAMA_URL" -H "Content-Type: application/json" -d "$payload")
     echo "$response" > "$raw_file"
@@ -118,7 +128,12 @@ send_prompt() {
 # Helper: parse response and extract tool calls
 parse_response() {
     local raw_file="$1"
-    python3 "$SCRIPT_DIR/parser.py" --fallback < "$raw_file" 2>/dev/null
+    local context="${2:-}"
+    if [ -n "$context" ]; then
+        python3 "$SCRIPT_DIR/parser.py" --fallback --context "$context" < "$raw_file" 2>/dev/null
+    else
+        python3 "$SCRIPT_DIR/parser.py" --fallback < "$raw_file" 2>/dev/null
+    fi
 }
 
 # Helper: validate write_file tool call
@@ -143,8 +158,11 @@ import sys, re
 raw = sys.stdin.read()
 decoded = raw
 decoded = re.sub(r'\\\\u([0-9a-fA-F]{4})', lambda m: chr(int(m.group(1), 16)), decoded)
-decoded = re.sub(r'\}\s*\"?\s*\}?\s*\}?\s*\`{3,}\s*$', '}', decoded, flags=re.DOTALL)
-decoded = re.sub(r'\}\s*\"?\s*\}?\s*$', '}', decoded, flags=re.DOTALL)
+# Only strip trailing artifacts that contain quotes or backticks (parser junk)
+# Do NOT strip bare closing braces - those are legitimate Java code
+decoded = re.sub(r'\}\s*\"\s*\}\s*\}\s*\`{3,}\s*$', '}', decoded, flags=re.DOTALL)
+decoded = re.sub(r'\}\s*\"\s*\}\s*\`{3,}\s*$', '}', decoded, flags=re.DOTALL)
+decoded = re.sub(r'\`{3,}\s*$', '', decoded, flags=re.DOTALL)
 decoded = decoded.strip()
 print(decoded)
 " <<< "$content")
@@ -217,13 +235,19 @@ validate_java() {
 # Track results
 declare -A RESULTS
 STAGE_DETECTED=""
+FORMAT_DETECTED=""
+
+# Initialize MESSAGES with system prompt and first user prompt
+MESSAGES=$(jq -n \
+  --arg user "Write a Java file named pm_hello.java with a class pm_hello that prints Hello World." \
+  '[{role: "user", content: $user}]')
 
 echo ""
 echo "--- Step 1: CREATE ---"
 echo "Prompt: Write a Java file named pm_hello.java with a class pm_hello that prints Hello World."
-RESPONSE=$(send_prompt "create" "Write a Java file named pm_hello.java with a class pm_hello that prints Hello World.")
+RESPONSE=$(send_messages "create" "$MESSAGES")
 RAW_FILE="$CONFIG_DIR/${SANITIZED_MODEL}_pm_create.raw.json"
-TOOL_CALLS=$(parse_response "$RAW_FILE")
+TOOL_CALLS=$(parse_response "$RAW_FILE" "create")
 NUM_CALLS=$(echo "$TOOL_CALLS" | jq 'length')
 
 if [ "$NUM_CALLS" -gt 0 ]; then
@@ -233,25 +257,48 @@ if [ "$NUM_CALLS" -gt 0 ]; then
     # Detect stage from this response
     STAGE_DETECTED=$(python3 "$SCRIPT_DIR/parser.py" --probe < "$RAW_FILE" 2>/dev/null | jq -r '.stage // "None"')
 
+    # Map stage to format: A=native tool_calls, B=JSON in content, C=markdown code blocks
+    case "$STAGE_DETECTED" in
+        1) FORMAT_DETECTED="A" ;;      # Native tool_calls
+        3|4) FORMAT_DETECTED="B" ;;    # JSON in content
+        6|7|8) FORMAT_DETECTED="C" ;;  # Markdown code blocks
+        *) FORMAT_DETECTED="C" ;;      # Default to C for unknown
+    esac
+
     if [ "$TOOL_NAME" = "write_file" ]; then
         RESULT=$(validate_write_file "$TOOL_ARGS")
         RESULTS[create]="$RESULT"
         echo "Result: $RESULT"
+
+        # Append assistant response to MESSAGES
+        ASSISTANT_MSG=$(echo "$RESPONSE" | jq '.message')
+        MESSAGES=$(jq -s '.[0] + [.[1]]' <(echo "$MESSAGES") <(echo "$ASSISTANT_MSG"))
+
+        # Append tool result as user message
+        MESSAGES=$(jq -s '.[0] + [{"role": "user", "content": "File written successfully."}]' <(echo "$MESSAGES"))
     else
         RESULTS[create]="FAIL: wrong tool name ($TOOL_NAME)"
         echo "Result: FAIL: wrong tool name ($TOOL_NAME)"
+
+        # Still append the response to maintain history
+        ASSISTANT_MSG=$(echo "$RESPONSE" | jq '.message')
+        MESSAGES=$(jq -s '.[0] + [.[1]]' <(echo "$MESSAGES") <(echo "$ASSISTANT_MSG"))
+        MESSAGES=$(jq -s '.[0] + [{"role": "user", "content": "Error: expected write_file tool call."}]' <(echo "$MESSAGES"))
     fi
 else
     RESULTS[create]="FAIL: no tool calls detected"
     echo "Result: FAIL: no tool calls detected"
+
+    # Append empty response to maintain history
+    MESSAGES=$(jq -s '.[0] + [{"role": "assistant", "content": ""}, {"role": "user", "content": "No tool call detected. Please try again."}]' <(echo "$MESSAGES"))
 fi
 
 echo ""
 echo "--- Step 2: COMPILE ---"
 echo "Prompt: Compile pm_hello.java."
-RESPONSE=$(send_prompt "compile" "Compile pm_hello.java.")
+RESPONSE=$(send_messages "compile" "$MESSAGES")
 RAW_FILE="$CONFIG_DIR/${SANITIZED_MODEL}_pm_compile.raw.json"
-TOOL_CALLS=$(parse_response "$RAW_FILE")
+TOOL_CALLS=$(parse_response "$RAW_FILE" "compile")
 NUM_CALLS=$(echo "$TOOL_CALLS" | jq 'length')
 
 if [ "$NUM_CALLS" -gt 0 ]; then
@@ -262,21 +309,38 @@ if [ "$NUM_CALLS" -gt 0 ]; then
         RESULT=$(validate_javac "$TOOL_ARGS")
         RESULTS[compile]="$RESULT"
         echo "Result: $RESULT"
+
+        # Append assistant response to MESSAGES
+        ASSISTANT_MSG=$(echo "$RESPONSE" | jq '.message')
+        MESSAGES=$(jq -s '.[0] + [.[1]]' <(echo "$MESSAGES") <(echo "$ASSISTANT_MSG"))
+
+        # Append tool result
+        if [ "$RESULT" = "PASS" ]; then
+            MESSAGES=$(jq -s '.[0] + [{"role": "user", "content": "Compilation successful."}]' <(echo "$MESSAGES"))
+        else
+            MESSAGES=$(jq -s '.[0] + [{"role": "user", "content": "Compilation failed: '"$RESULT"'"}]' <(echo "$MESSAGES"))
+        fi
     else
         RESULTS[compile]="FAIL: wrong tool name ($TOOL_NAME)"
         echo "Result: FAIL: wrong tool name ($TOOL_NAME)"
+
+        ASSISTANT_MSG=$(echo "$RESPONSE" | jq '.message')
+        MESSAGES=$(jq -s '.[0] + [.[1]]' <(echo "$MESSAGES") <(echo "$ASSISTANT_MSG"))
+        MESSAGES=$(jq -s '.[0] + [{"role": "user", "content": "Error: expected javac tool call."}]' <(echo "$MESSAGES"))
     fi
 else
     RESULTS[compile]="FAIL: no tool calls detected"
     echo "Result: FAIL: no tool calls detected"
+
+    MESSAGES=$(jq -s '.[0] + [{"role": "assistant", "content": ""}, {"role": "user", "content": "No tool call detected. Please try again."}]' <(echo "$MESSAGES"))
 fi
 
 echo ""
 echo "--- Step 3: RUN ---"
 echo "Prompt: Run pm_hello with no arguments."
-RESPONSE=$(send_prompt "run" "Run pm_hello with no arguments.")
+RESPONSE=$(send_messages "run" "$MESSAGES")
 RAW_FILE="$CONFIG_DIR/${SANITIZED_MODEL}_pm_run.raw.json"
-TOOL_CALLS=$(parse_response "$RAW_FILE")
+TOOL_CALLS=$(parse_response "$RAW_FILE" "run")
 NUM_CALLS=$(echo "$TOOL_CALLS" | jq 'length')
 
 if [ "$NUM_CALLS" -gt 0 ]; then
@@ -287,13 +351,30 @@ if [ "$NUM_CALLS" -gt 0 ]; then
         RESULT=$(validate_java "$TOOL_ARGS")
         RESULTS[run]="$RESULT"
         echo "Result: $RESULT"
+
+        # Append assistant response to MESSAGES
+        ASSISTANT_MSG=$(echo "$RESPONSE" | jq '.message')
+        MESSAGES=$(jq -s '.[0] + [.[1]]' <(echo "$MESSAGES") <(echo "$ASSISTANT_MSG"))
+
+        # Append tool result
+        if [ "$RESULT" = "PASS" ]; then
+            MESSAGES=$(jq -s '.[0] + [{"role": "user", "content": "Hello World"}]' <(echo "$MESSAGES"))
+        else
+            MESSAGES=$(jq -s '.[0] + [{"role": "user", "content": "Error: '"$RESULT"'"}]' <(echo "$MESSAGES"))
+        fi
     else
         RESULTS[run]="FAIL: wrong tool name ($TOOL_NAME)"
         echo "Result: FAIL: wrong tool name ($TOOL_NAME)"
+
+        ASSISTANT_MSG=$(echo "$RESPONSE" | jq '.message')
+        MESSAGES=$(jq -s '.[0] + [.[1]]' <(echo "$MESSAGES") <(echo "$ASSISTANT_MSG"))
+        MESSAGES=$(jq -s '.[0] + [{"role": "user", "content": "Error: expected java tool call."}]' <(echo "$MESSAGES"))
     fi
 else
     RESULTS[run]="FAIL: no tool calls detected"
     echo "Result: FAIL: no tool calls detected"
+
+    MESSAGES=$(jq -s '.[0] + [{"role": "assistant", "content": ""}, {"role": "user", "content": "No tool call detected. Please try again."}]' <(echo "$MESSAGES"))
 fi
 
 # Cleanup pm_* files
@@ -325,6 +406,7 @@ import json, sys
 # Read results from environment
 config = {
     'stage': None,
+    'format': sys.argv[9] if len(sys.argv) > 9 else 'C',  # A=native, B=JSON, C=markdown
     'model_id': sys.argv[1],
     'profiled_at': sys.argv[2],
     'validation': {
@@ -345,7 +427,7 @@ with open(sys.argv[8], 'w') as f:
     json.dump(config, f, indent=2)
 " "$MODEL_ID" "$PROFILED_AT" \
   "${RESULTS[create]}" "${RESULTS[compile]}" "${RESULTS[run]}" \
-  "$VALIDATION_STATUS" "${STAGE_DETECTED:-None}" "$CONFIG_FILE"
+  "$VALIDATION_STATUS" "${STAGE_DETECTED:-None}" "$CONFIG_FILE" "${FORMAT_DETECTED:-C}"
 
 echo "Config saved to: $CONFIG_FILE"
 echo "Validation status: $VALIDATION_STATUS"
