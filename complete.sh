@@ -138,8 +138,20 @@ MESSAGES=$(jq -n \
     {role: "user", content: $spec}
   ]')
 
-# Load tools from external JSON file (extensible — add new tools to tools.json)
-TOOLS=$(jq -c '.tools' tools.json 2>/dev/null || echo "[]")
+# Load tools from external JSON file, injecting spec filename into descriptions
+TOOLS=$(jq -c --arg fn "$EXPECTED_FILENAME" --arg cn "$CLASS_TOKEN" '.tools |
+  map(
+    if .function.name == "write_file" then
+      .function.description = ("Creates or overwrites a Java source file on disk. Use this FIRST — before javac or java. ALWAYS write to file: " + $fn + ". Do not use any other filename.")
+      | .function.parameters.properties.filename.description = ("Must be exactly: " + $fn + ". Do not use any other filename.")
+    elif .function.name == "javac" then
+      .function.description = ("Compiles " + $fn + " that already exists on disk. Only proceed to java after this succeeds.")
+      | .function.parameters.properties.filename.description = ("Must be exactly: " + $fn)
+    elif .function.name == "java" then
+      .function.description = ("Runs " + $cn + " (must have called javac successfully first). Do not call this before javac completes without errors.")
+      | .function.parameters.properties.class_name.description = ("Must be exactly: " + $cn + ". Do not add .class extension.")
+    else . end
+  )' tools.json 2>/dev/null || echo "[]")
 
 echo "--> Starting Ollama Agent Loop (Max Steps: $MAX_STEPS, Max Time per Step: ${STEP_TIMEOUT}s)..."
 LAST_RESPONSE=""
