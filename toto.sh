@@ -16,8 +16,8 @@ echo "=== Model Validation Results ===" > "$RESULTS_FILE"
 echo "Date: $(date)" >> "$RESULTS_FILE"
 echo "" >> "$RESULTS_FILE"
 
-# Get list of models (skip embed, ocr, and heretic)
-MODELS=$(ollama list | grep -Ev 'NAME|embed|ocr|heretic' | sed -e 's/ .*//')
+# Get list of models (skip embed and ocr)
+MODELS=$(ollama list | grep -Ev 'NAME|embed|ocr' | sed -e 's/ .*//')
 
 TOTAL=0
 PASSED=0
