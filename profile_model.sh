@@ -6,6 +6,7 @@
 #   Format B: JSON in content (qwen2.5-coder)
 #   Format C: Markdown code blocks (qwen3.5:9b-mlx)
 # We detect the format during profiling and adapt parsing accordingly.
+# Format C models write javac/java in bash blocks — we detect these with --context.
 
 set +H
 
