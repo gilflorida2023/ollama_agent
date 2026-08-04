@@ -10,12 +10,13 @@ BT = '\x60'
 
 DEBUG_LOG_PATH = os.path.join(os.path.dirname(__file__), 'logs', 'parser_debug.log')
 
-def _debug_log(message):
+def _debug_log(message, model=None):
     try:
         os.makedirs(os.path.join(os.path.dirname(__file__), 'logs'), exist_ok=True)
         ts = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        model_prefix = f'[{model}] ' if model else ''
         with open(DEBUG_LOG_PATH, 'a') as f:
-            f.write(f'[{ts}] {message}\n')
+            f.write(f'[{ts}] {model_prefix}{message}\n')
     except Exception:
         pass
 
@@ -307,7 +308,7 @@ if __name__ == "__main__":
                 if result:
                     print(json.dumps(result))
                     sys.exit(0)
-                _debug_log(f'CONFIGURED STAGE {configured_stage} FAILED, trying all stages')
+                _debug_log(f'CONFIGURED STAGE {configured_stage} FAILED, trying all stages', model=args.model)
             # Fallback: try all stages, prioritizing common ones
             # Skip stages 6 and 7 when context is compile/run (model ignoring tools)
             stages_to_try = [1, 3, 4, 5, 8] if args.context in ('compile', 'run') else [1, 3, 4, 5, 6, 7, 8]
@@ -316,11 +317,11 @@ if __name__ == "__main__":
                 if result:
                     print(json.dumps(result))
                     sys.exit(0)
-            _debug_log('ALL STAGES FAILED')
+            _debug_log('ALL STAGES FAILED', model=args.model)
             print("[]")
         else:
             result = parse_response(data, skip, context=args.context)
             print(json.dumps(result))
     except Exception:
-        _debug_log('EXCEPTION in main: parse failure')
+        _debug_log('EXCEPTION in main: parse failure', model=args.model)
         print("[]")

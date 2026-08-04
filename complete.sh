@@ -282,7 +282,7 @@ print(json.dumps({"role": "tool", "content": content}))
         fi
 
         # Fallback: Save raw stream for user inspection
-        RAW_STREAM_FILE="logs/raw_stream_${STEP_COUNT}.log"
+        RAW_STREAM_FILE="logs/raw_stream_${SANITIZED_MODEL}_step${STEP_COUNT}.log"
         echo "$RESPONSE" > "$RAW_STREAM_FILE"
         _log_debug "fallback_triggered step=$STEP_COUNT raw_file=$RAW_STREAM_FILE"
 
