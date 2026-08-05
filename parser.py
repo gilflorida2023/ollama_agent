@@ -24,7 +24,11 @@ REGEX_THINK = re.compile(r'<think>.*?</think>', re.DOTALL)
 REGEX_MARKDOWN_JSON = re.compile(
     BT * 3 + r'(?:json)?\s*\n(\{.*?\})\s*\n' + BT * 3, re.DOTALL
 )
-REGEX_XML_WRITE = re.compile(
+REGEX_XML_WRITE_TAG = re.compile(
+    r'<write_file>\s*\n\s*\{.*?\}\s*\n</write_file>',
+    re.DOTALL
+)
+REGEX_XML_WRITE_INLINE = re.compile(
     r'<write_file\s+filename="([^"]+)"\s+content="([^"]+)"'
 )
 REGEX_XML_JAVAC = re.compile(r'<javac\s+filename="([^"]+)"')
@@ -57,6 +61,14 @@ def _extract_tool_info(obj):
         return None, None
     return name, args
 
+def _unescape_content(s):
+    """Unescape common escape sequences in JSON strings"""
+    s = s.replace('\\\\\\\\', '\\\\')
+    s = s.replace('\\\\n', '\n')
+    s = s.replace('\\\\t', '\t')
+    s = s.replace('\\\\\\"', '\\"')
+    return s
+
 
 def _probe(data):
     """Run full cascade, return first matching stage number or None."""
@@ -87,7 +99,8 @@ def _probe(data):
         except Exception:
             pos = idx + 1
 
-    if re.findall(REGEX_XML_WRITE, content):
+    # Check both tag-style and inline-style formats
+    if re.findall(REGEX_XML_WRITE_TAG, content) or re.findall(REGEX_XML_WRITE_INLINE, content):
         return 5
 
     if re.findall(REGEX_MARKDOWN_JAVA, content):
@@ -174,11 +187,46 @@ def parse_response(data, skip=None, context=None):
             return tool_calls
 
     if 5 not in skip:
-        for fn, code_content in re.findall(REGEX_XML_WRITE, content):
+        # First try tag-style format
+        for tag_match in re.findall(REGEX_XML_WRITE_TAG, content):
+            # Extract JSON from inside the tag
+            json_match = re.search(r'\{[\s\S]*?\}', tag_match)
+            if json_match:
+                json_str = json_match.group(0)
+                
+                # Try to parse JSON directly
+                try:
+                    parsed = json.loads(json_str)
+                    name, args = _extract_tool_info(parsed)
+                    if name:
+                        tool_calls.append({"name": name, "arguments": args})
+                except Exception:
+                    # Fallback: extract filename and content manually
+                    filename_match = re.search(r'"filename"\s*:\s*"([^"]*)"', json_str)
+                    content_match = re.search(r'"content"\s*:\s*"([^"]*(?:\\\"[^\"]*)*)\"', json_str, re.DOTALL)
+                    
+                    if filename_match and content_match:
+                        filename = filename_match.group(1)
+                        content_field = content_match.group(1)
+                        
+                        # Unescape the content field
+                        unescaped_content = _unescape_content(content_field)
+                        
+                        tool_calls.append({
+                            "name": "write_file",
+                            "arguments": {"filename": filename, "content": unescaped_content}
+                        })
+        
+        # Then try inline format
+        for fn, code_content in re.findall(REGEX_XML_WRITE_INLINE, content):
+            # Unescape the content
+            unescaped_content = _unescape_content(code_content)
+            
             tool_calls.append({
                 "name": "write_file",
-                "arguments": {"filename": fn, "content": code_content}
+                "arguments": {"filename": fn, "content": unescaped_content}
             })
+        
         for fn in re.findall(REGEX_XML_JAVAC, content):
             tool_calls.append({
                 "name": "javac",

@@ -72,6 +72,7 @@ if [ ! -f "$SPEC_FILE" ]; then
     exit 1
 fi
 
+# Clean up any previous artifacts (sandbox is managed by git)
 rm -f *.class *.java 2>&1 >/dev/null || true
 
 echo "--> Reading specification file..."
@@ -92,7 +93,112 @@ shopt -u nocasematch
 
 CLASS_TOKEN="${EXPECTED_FILENAME%.java}"
 
+# Sandbox directory for git-based model isolation
+SANDBOX_DIR="sandbox"
+SANDBOX_BRANCH="sandbox_${SANITIZED_MODEL}"
+
+# Setup sandbox: create git repo, checkout model branch
+_setup_sandbox() {
+    mkdir -p "$SANDBOX_DIR"
+    
+    # Initialize git repo if needed
+    if [ ! -d "$SANDBOX_DIR/.git" ]; then
+        (cd "$SANDBOX_DIR" && git init -q && git config user.name "Agent" && git config user.email "agent@local")
+        echo "" > "$SANDBOX_DIR/.gitkeep"
+        (cd "$SANDBOX_DIR" && git add -A && git commit -m "sandbox: initialize main branch" -q)
+    fi
+    
+    # Create or checkout model branch
+    (cd "$SANDBOX_DIR" && \
+        if git rev-parse --verify "$SANDBOX_BRANCH" >/dev/null 2>&1; then
+            git checkout "$SANDBOX_BRANCH" -q
+        else
+            git checkout -b "$SANDBOX_BRANCH" HEAD -q
+        fi)
+}
+
+# Ensure coherence: checkout model branch so previous code is available
+_ensure_coherence() {
+    (cd "$SANDBOX_DIR" && git checkout "$SANDBOX_BRANCH" -q 2>/dev/null) || true
+}
+
+# Commit working files in sandbox on success
+_commit_sandbox() {
+    (cd "$SANDBOX_DIR" && git add -A 2>/dev/null && \
+        if ! git diff --staged --quiet 2>/dev/null; then
+            git commit -m "sandbox: ${CLASS_TOKEN} - validation passed" -q
+            echo "  ✅ Committed to branch $SANDBOX_BRANCH"
+        fi)
+}
+
+# Rollback sandbox to last good commit
+_rollback_sandbox() {
+    (cd "$SANDBOX_DIR" && git reset --hard HEAD -q 2>/dev/null) || true
+    rm -f "$SANDBOX_DIR"/*.java "$SANDBOX_DIR"/*.class 2>/dev/null || true
+}
+
+# End-of-turn validation: check if expected file exists, compiles, and passes tests
+_validate_turn() {
+    local sandbox_target="${SANDBOX_DIR}/${EXPECTED_FILENAME}"
+    local sandbox_class="${SANDBOX_DIR}/${CLASS_TOKEN}.class"
+    
+    # Only validate if target file exists in sandbox
+    [ ! -f "$sandbox_target" ] && echo "validate: $EXPECTED_FILENAME not found" && return 1
+
+    # Quick compile check
+    if (cd "$SANDBOX_DIR" && javac "$EXPECTED_FILENAME" 2>/dev/null); then
+        :
+    else
+        echo "validate: compilation failed"
+        # Commit the failing state so we can detect progress next turn
+        (cd "$SANDBOX_DIR" && git add -A 2>/dev/null && \
+            git diff --staged --quiet 2>/dev/null || \
+            git commit -m "sandbox: ${CLASS_TOKEN} - failed validation (compile)" -q 2>/dev/null) || true
+        return 1
+    fi
+
+    # Run test inputs if available
+    if [ -f "tasks.json" ]; then
+        local passed=0
+        local failed=0
+        while IFS= read -r line; do
+            local inp=$(echo "$line" | jq -r '.input')
+            local expected=$(echo "$line" | jq -r '.expected')
+            local actual=$(cd "$SANDBOX_DIR" && timeout 10 java "$CLASS_TOKEN" "$inp" 2>/dev/null || echo "ERROR")
+            actual=$(echo "$actual" | tr -d '\n\r')
+            if [[ "${actual,,}" == "${expected,,}" ]]; then
+                passed=$((passed + 1))
+            else
+                failed=$((failed + 1))
+                break  # Fail fast on first mismatch
+            fi
+        done < <(python3 -c "import json; [print(json.dumps(t)) for t in json.load(open('tasks.json')).get('regression_tests', [])]" 2>/dev/null)
+
+        if [ "$failed" -gt 0 ]; then
+            echo "validate: $failed test(s) failed"
+            # Commit the failing state so we can detect progress next turn
+            (cd "$SANDBOX_DIR" && git add -A 2>/dev/null && \
+                git diff --staged --quiet 2>/dev/null || \
+                git commit -m "sandbox: ${CLASS_TOKEN} - failed validation (test)" -q 2>/dev/null) || true
+            return 1
+        fi
+        if [ "$passed" -gt 0 ]; then
+            echo "validate: $passed test(s) passed"
+        fi
+    fi
+
+    echo "✅ [TURN VALIDATION] ${EXPECTED_FILENAME} compiles and passes tests."
+    
+    # Commit to sandbox on success
+    _commit_sandbox
+    return 0
+}
+
 echo "--> Spec requests file: $EXPECTED_FILENAME"
+echo "--> Sandbox: Using $SANDBOX_DIR (branch: $SANDBOX_BRANCH)"
+
+# Setup sandbox for model isolation
+_setup_sandbox
 
 SYSTEM_PROMPT=$(sed "s/{{FILENAME}}/$EXPECTED_FILENAME/g; s/{{CLASS_TOKEN}}/$CLASS_TOKEN/g" prompts/system.txt)
 
@@ -181,48 +287,11 @@ _get_context() {
     esac
 }
 
-# End-of-turn validation: check if hashprime.java exists, compiles, and passes tests
-_validate_turn() {
-    # Only validate if hashprime.java exists
-    [ ! -f "hashprime.java" ] && echo "validate: hashprime.java not found" && return 1
-
-    # Quick compile check
-    if ! javac hashprime.java 2>/dev/null; then
-        echo "validate: compilation failed"
-        return 1
-    fi
-
-    # Run test inputs if available
-    if [ -f "tasks.json" ]; then
-        local passed=0
-        local failed=0
-        while IFS= read -r line; do
-            local inp=$(echo "$line" | jq -r '.input')
-            local expected=$(echo "$line" | jq -r '.expected')
-            local actual=$(timeout 10 java hashprime "$inp" 2>/dev/null || echo "ERROR")
-            actual=$(echo "$actual" | tr -d '\n\r')
-            if [[ "${actual,,}" == "${expected,,}" ]]; then
-                passed=$((passed + 1))
-            else
-                failed=$((failed + 1))
-                break  # Fail fast on first mismatch
-            fi
-        done < <(python3 -c "import json; [print(json.dumps(t)) for t in json.load(open('tasks.json')).get('regression_tests', [])]" 2>/dev/null)
-
-        if [ "$failed" -gt 0 ]; then
-            echo "validate: $failed test(s) failed"
-            return 1
-        fi
-        if [ "$passed" -gt 0 ]; then
-            echo "validate: $passed test(s) passed"
-        fi
-    fi
-
-    echo "✅ [TURN VALIDATION] hashprime.java compiles and passes tests."
-    return 0
-}
-
+echo "==> Starting agent loop for model: $MODEL"
 while true; do
+    # Ensure sandbox coherence: checkout model branch so previous good code is available
+    _ensure_coherence
+
     PAYLOAD=$(jq -s --arg model "$MODEL" \
       '{model: $model, messages: .[0], tools: .[1], stream: false, temperature: 0, think: false}' \
       <(echo "$MESSAGES") <(echo "$TOOLS"))
@@ -319,7 +388,7 @@ print(json.dumps({"role": "tool", "content": content}))
                 echo -e "\n=== Maximum Steps ($MAX_STEPS) Reached for Model $MODEL. Terminating. ==="
                 break
             fi
-            MISSING_COUNT=0
+MISSING_COUNT=0
             continue
         fi
 
@@ -351,6 +420,9 @@ print(json.dumps({"role": "tool", "content": "Skipped: no tool calls detected."}
             echo "⏭️  Early exit: validation passed after fallback."
             HARNESS_EXIT=0
             break
+        else
+            echo "⚠️  Validation failed. Progress detected (file changed)."
+            echo "   Allowing model another turn to fix code..."
         fi
 
         STEP_COUNT=$((STEP_COUNT + 1))
@@ -419,7 +491,7 @@ print(decoded)
 ' <<< "$CONTENT")
 
                 echo "   [EXEC]: Writing file '$FILENAME'..."
-                printf "%s\n" "$FORMATTED_CONTENT" > "$FILENAME"
+                printf "%s\n" "$FORMATTED_CONTENT" > "$SANDBOX_DIR/$FILENAME"
 
                 echo "   --- [FILE CONTENT PREVIEW] ---"
                 echo "$FORMATTED_CONTENT" | sed 's/^/   | /'
@@ -434,6 +506,15 @@ print(decoded)
                         echo "$validation_output"
                         echo "✅ [AUTO-VALIDATE] File compiles and passes all tests!"
                         AUTO_VALIDATED=1
+                    else
+                        echo "❌ [AUTO-VALIDATE] Failed:"
+                        echo "$validation_output" | sed 's/^/   | /'
+                        OUT="File '$FILENAME' written successfully.
+
+⚠️ Auto-validation failed:
+$validation_output
+
+Fix the code and re-submit."
                     fi
                 fi
                 ;;
@@ -452,7 +533,7 @@ print(decoded)
                 fi
 
                 echo "   [EXEC]: javac $FILENAME"
-                if COMPILE_ERR=$(timeout "$STEP_TIMEOUT" javac "$FILENAME" 2>&1); then
+                if COMPILE_ERR=$(cd "$SANDBOX_DIR" && timeout "$STEP_TIMEOUT" javac "$FILENAME" 2>&1); then
                     OUT="Compilation successful. You can now execute the compiled class using 'java'."
                     echo "   [SUCCESS]: Compiled cleanly."
                     # Auto-validate after successful compilation
@@ -461,6 +542,15 @@ print(decoded)
                         echo "$validation_output"
                         echo "✅ [AUTO-VALIDATE] Code compiles and passes all tests!"
                         AUTO_VALIDATED=1
+                    else
+                        echo "❌ [AUTO-VALIDATE] Tests failed after compilation:"
+                        echo "$validation_output" | sed 's/^/   | /'
+                        OUT="Compilation successful.
+
+⚠️ Auto-validation failed after compilation:
+$validation_output
+
+Fix the code and re-compile."
                     fi
                 else
                     OUT="Compilation failed with error:\n$COMPILE_ERR\nPlease fix the source code using 'write_file' and re-compile."
@@ -485,7 +575,7 @@ print(decoded)
                 fi
 
                 echo "   [EXEC]: java $CLASS_NAME $RAW_ARGS"
-                RUN_OUT=$(timeout "$STEP_TIMEOUT" java $CLASS_NAME $RAW_ARGS 2>&1 || true)
+                RUN_OUT=$(cd "$SANDBOX_DIR" && timeout "$STEP_TIMEOUT" java $CLASS_NAME $RAW_ARGS 2>&1 || true)
 
                 if echo "$RUN_OUT" | grep -q "ClassNotFoundException"; then
                     OUT="Program Execution Failed:\n$RUN_OUT\nHINT: Class '$CLASS_NAME.class' was not found. Ensure you call 'write_file' to save the Java source code and 'javac' to compile it before calling 'java'."
@@ -624,6 +714,16 @@ print(json.dumps({"role": "tool", "content": content}))
         echo "⏭️  Early exit: validation passed."
         HARNESS_EXIT=0
         break
+    else
+        # Check if model made any changes since last commit (git-based progress detection)
+        git_diff_stat=$(cd "$SANDBOX_DIR" && git diff --stat HEAD 2>/dev/null)
+        if [ -z "$git_diff_stat" ]; then
+            echo "❌ Validation failed. No new changes detected in sandbox."
+            echo "   Model is not making progress. Terminating."
+            break
+        fi
+        echo "⚠️  Validation failed. Progress detected (file changed)."
+        echo "   Allowing model another turn to fix code..."
     fi
 
     STEP_COUNT=$((STEP_COUNT + 1))
@@ -645,22 +745,22 @@ echo "=========================================="
 
 HARNESS_EXIT=0
 
-if [ -f "hashprime.java" ]; then
-    echo "🔍 Found hashprime.java on disk. Starting automated test harness..."
+if [ -f "$SANDBOX_DIR/$EXPECTED_FILENAME" ]; then
+    echo "🔍 Found $EXPECTED_FILENAME in sandbox ($SANDBOX_DIR). Starting automated test harness..."
 
     # Ensure tasks.json exists for regression tests
     if [ ! -f "tasks.json" ]; then
-        if [ -f "sandbox/tasks.json" ]; then
-            cp sandbox/tasks.json tasks.json
+        if [ -f "$SANDBOX_DIR/tasks.json" ]; then
+            cp "$SANDBOX_DIR/tasks.json" tasks.json
         elif [ -f "spec.yaml" ]; then
             python3 spec_parser.py spec.yaml 2>/dev/null || true
         fi
     fi
 
-    if COMPILE_LOG=$(javac hashprime.java 2>&1); then
+    if COMPILE_LOG=$(cd "$SANDBOX_DIR" && javac "$EXPECTED_FILENAME" 2>&1); then
         echo "✅ [HARNESS]: Compilation succeeded."
 
-        python3 << 'PYEOF' 2>&1 || HARNESS_EXIT=$?
+        python3 << PYEOF 2>&1 || HARNESS_EXIT=$?
 import json, subprocess, sys
 with open("tasks.json") as f:
     data = json.load(f)
@@ -675,10 +775,11 @@ for t in tests:
     expected = t["expected"]
     try:
         actual = subprocess.check_output(
-            ["java", "hashprime", inp],
+            ["java", "$CLASS_TOKEN", inp],
             stderr=subprocess.STDOUT,
-            timeout=60
-        ).decode().replace("\r", "").replace("\n", "").strip()
+            timeout=60,
+            cwd="$SANDBOX_DIR"
+        ).decode().replace("\\r", "").replace("\\n", "").strip()
     except subprocess.TimeoutExpired:
         actual = "TIMEOUT"
     except subprocess.CalledProcessError as e:
@@ -700,7 +801,7 @@ PYEOF
         HARNESS_EXIT=1
     fi
 else
-    echo "❌ [HARNESS]: hashprime.java was not found on disk. Skipping validation."
+    echo "❌ [HARNESS]: $EXPECTED_FILENAME was not found in sandbox. Skipping validation."
     HARNESS_EXIT=1
 fi
 

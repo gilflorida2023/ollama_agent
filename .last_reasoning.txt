@@ -1,8 +1,8 @@
 ```json
 {
-  "name": "promote_skill",
+  "name": "search_okf",
   "arguments": {
-    "skill_name": "compute_sha256_prime_numbers"
+    "query": "SHA-256 hash prime numbers Sieve of Eratosthenes"
   }
 }
 ```
