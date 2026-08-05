@@ -159,6 +159,7 @@ MISSING_COUNT=0
 DEBUG_LOG="$PWD/logs/complete_debug.log"
 STEP_TIMEOUT_COUNT=0
 LAST_TOOL=""  # Track last tool executed for context detection
+AUTO_VALIDATED=0  # Set to 1 when auto-validation passes after write_file
 
 _log_debug() {
     local ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -425,6 +426,16 @@ print(decoded)
                 echo "   ------------------------------"
 
                 OUT="File '$FILENAME' written successfully."
+
+                # Auto-validate: check if this is the target file and if so, compile and test
+                if [[ "$FILENAME" == "$EXPECTED_FILENAME" ]]; then
+                    validation_output=$(_validate_turn 2>&1) || true
+                    if echo "$validation_output" | grep -q "✅"; then
+                        echo "$validation_output"
+                        echo "✅ [AUTO-VALIDATE] File compiles and passes all tests!"
+                        AUTO_VALIDATED=1
+                    fi
+                fi
                 ;;
 
             "javac")
@@ -444,6 +455,13 @@ print(decoded)
                 if COMPILE_ERR=$(timeout "$STEP_TIMEOUT" javac "$FILENAME" 2>&1); then
                     OUT="Compilation successful. You can now execute the compiled class using 'java'."
                     echo "   [SUCCESS]: Compiled cleanly."
+                    # Auto-validate after successful compilation
+                    validation_output=$(_validate_turn 2>&1) || true
+                    if echo "$validation_output" | grep -q "✅"; then
+                        echo "$validation_output"
+                        echo "✅ [AUTO-VALIDATE] Code compiles and passes all tests!"
+                        AUTO_VALIDATED=1
+                    fi
                 else
                     OUT="Compilation failed with error:\n$COMPILE_ERR\nPlease fix the source code using 'write_file' and re-compile."
                     echo "   [ERROR]: Compilation failed."
@@ -591,6 +609,13 @@ print(json.dumps({"role": "tool", "content": content}))
 ' <<< "$COMBINED_OUTPUT")
 
     MESSAGES=$(jq -s '.[0] + [.[1]]' <(echo "$MESSAGES") <(echo "$TOOL_RESPONSE_MSG"))
+
+    # Early exit if auto-validation passed during tool execution
+    if [ "$AUTO_VALIDATED" -eq 1 ]; then
+        echo "⏭️  Early exit: validation passed during tool execution."
+        HARNESS_EXIT=0
+        break
+    fi
 
     # End-of-turn validation: check if model wrote code that compiles and passes tests
     VALIDATION_RESULT=$(_validate_turn 2>&1) || true
