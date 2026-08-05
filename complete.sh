@@ -180,6 +180,47 @@ _get_context() {
     esac
 }
 
+# End-of-turn validation: check if hashprime.java exists, compiles, and passes tests
+_validate_turn() {
+    # Only validate if hashprime.java exists
+    [ ! -f "hashprime.java" ] && echo "validate: hashprime.java not found" && return 1
+
+    # Quick compile check
+    if ! javac hashprime.java 2>/dev/null; then
+        echo "validate: compilation failed"
+        return 1
+    fi
+
+    # Run test inputs if available
+    if [ -f "tasks.json" ]; then
+        local passed=0
+        local failed=0
+        while IFS= read -r line; do
+            local inp=$(echo "$line" | jq -r '.input')
+            local expected=$(echo "$line" | jq -r '.expected')
+            local actual=$(timeout 10 java hashprime "$inp" 2>/dev/null || echo "ERROR")
+            actual=$(echo "$actual" | tr -d '\n\r')
+            if [[ "${actual,,}" == "${expected,,}" ]]; then
+                passed=$((passed + 1))
+            else
+                failed=$((failed + 1))
+                break  # Fail fast on first mismatch
+            fi
+        done < <(python3 -c "import json; [print(json.dumps(t)) for t in json.load(open('tasks.json')).get('regression_tests', [])]" 2>/dev/null)
+
+        if [ "$failed" -gt 0 ]; then
+            echo "validate: $failed test(s) failed"
+            return 1
+        fi
+        if [ "$passed" -gt 0 ]; then
+            echo "validate: $passed test(s) passed"
+        fi
+    fi
+
+    echo "✅ [TURN VALIDATION] hashprime.java compiles and passes tests."
+    return 0
+}
+
 while true; do
     PAYLOAD=$(jq -s --arg model "$MODEL" \
       '{model: $model, messages: .[0], tools: .[1], stream: false, temperature: 0, think: false}' \
@@ -303,6 +344,13 @@ print(json.dumps({"role": "tool", "content": "Skipped: no tool calls detected."}
         ASSISTANT_MSG=$(echo "$RESPONSE" | jq '.message')
         MESSAGES=$(jq -s '.[0] + [.[1]]' <(echo "$MESSAGES") <(echo "$ASSISTANT_MSG"))
         MESSAGES=$(jq -s '.[0] + [.[1]]' <(echo "$MESSAGES") <(echo "$TOOL_RESPONSE_MSG"))
+
+        # End-of-turn validation: check if model wrote code even if parser failed
+        if _validate_turn; then
+            echo "⏭️  Early exit: validation passed after fallback."
+            HARNESS_EXIT=0
+            break
+        fi
 
         STEP_COUNT=$((STEP_COUNT + 1))
         echo "   [STEP COUNT]: $STEP_COUNT / $MAX_STEPS"
@@ -543,6 +591,15 @@ print(json.dumps({"role": "tool", "content": content}))
 ' <<< "$COMBINED_OUTPUT")
 
     MESSAGES=$(jq -s '.[0] + [.[1]]' <(echo "$MESSAGES") <(echo "$TOOL_RESPONSE_MSG"))
+
+    # End-of-turn validation: check if model wrote code that compiles and passes tests
+    VALIDATION_RESULT=$(_validate_turn 2>&1) || true
+    if [ -n "$VALIDATION_RESULT" ] && echo "$VALIDATION_RESULT" | grep -q "✅"; then
+        echo "$VALIDATION_RESULT"
+        echo "⏭️  Early exit: validation passed."
+        HARNESS_EXIT=0
+        break
+    fi
 
     STEP_COUNT=$((STEP_COUNT + 1))
     echo "   [STEP COUNT]: $STEP_COUNT / $MAX_STEPS"
