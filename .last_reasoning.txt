@@ -1,1 +1,8 @@
-
+```json
+{
+  "name": "promote_skill",
+  "arguments": {
+    "skill_name": "compute_sha256_prime_numbers"
+  }
+}
+```
